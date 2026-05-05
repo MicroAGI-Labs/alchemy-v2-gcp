@@ -240,7 +240,7 @@ This package has no bundling step — `package.json` exports `./src/index.ts` di
 
 There is no root `tsconfig.json` in `research-infra/` yet, so `bun tsc -b` from the repo root won't work. Each workspace member typechecks itself. (When all workspaces have `composite: true` we can add a root `tsconfig.json` with `references` and use `tsc -b`.)
 
-Expect ~hundreds of errors out of `vendor/distilled/packages/gcp/src/services/*.ts` when running `tsc` — these are upstream readonly-Schema mismatches that distilled hides by typechecking with `tsgo` (their native compiler) instead of `tsc`. Filter with `grep -E "^src/"` to see only errors in this package.
+Expect ~50 errors out of `vendor/distilled/packages/gcp/src/services/*.ts` when running `tsc` — these are upstream variance mismatches where the generated operation values produce deeply-`readonly` shapes (e.g. `readonly TagBinding[]`) that don't satisfy the hand-written response interfaces (`TagBinding[]`, no `readonly`). Verified to also fail under `@typescript/native-preview` (tsgo) at the same call sites with the same error count, so this is not a tsc-vs-tsgo gap — it's a real upstream issue and the only fix is in distilled (mark the response types `readonly`, or strip `readonly` from generator output). They don't affect runtime behavior. Filter with `grep -E "^src/"` to see only errors in this package; `^src/` should be empty.
 
 There is intentionally no `vitest.config.ts` yet — add one only when we wire up the first test. Mirror `vendor/alchemy/packages/alchemy/test/` setup if needed.
 

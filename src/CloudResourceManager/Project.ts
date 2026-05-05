@@ -2,9 +2,11 @@ import { ConfigError } from "@distilled.cloud/gcp";
 import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
+import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { isResolved } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
+import { diffTags } from "alchemy/Tags";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
@@ -107,17 +109,6 @@ export const Project = Resource<Project>("GCP.Project");
 const parentToString = (parent: ProjectParent): string =>
   parent.type === "folder" ? `folders/${parent.id}` : `organizations/${parent.id}`;
 
-const labelsEqual = (
-  a: Record<string, string>,
-  b: Record<string, string>,
-): boolean => {
-  const ak = Object.keys(a);
-  const bk = Object.keys(b);
-  if (ak.length !== bk.length) return false;
-  for (const k of ak) if (a[k] !== b[k]) return false;
-  return true;
-};
-
 const createProjectId = (id: string, override: string | undefined) =>
   Effect.gen(function* () {
     if (override) return override;
@@ -151,7 +142,10 @@ export const ProjectProvider = () =>
       const deleteProjects = yield* crm.deleteProjects;
       const getOperations = yield* crm.getOperations;
 
-      const awaitOperation = Effect.fn(function* (operationName: string) {
+      const awaitOperation = Effect.fn(function* (
+        operationName: string,
+        session: ScopedPlanStatusSession,
+      ) {
         const op = yield* getOperations({ name: operationName }).pipe(
           Effect.flatMap((current) =>
             current.done === true
@@ -162,6 +156,9 @@ export const ProjectProvider = () =>
             while: (e: { _tag?: string }) => e?._tag === "OperationPending",
             schedule: Schedule.exponential(Duration.seconds(1), 1.5).pipe(
               Schedule.both(Schedule.recurs(60)),
+              Schedule.tapOutput(() =>
+                session.note(`Waiting for GCP operation ${operationName}…`),
+              ),
             ),
           }),
         );
@@ -207,13 +204,15 @@ export const ProjectProvider = () =>
       const syncMutable = Effect.fn(function* (
         observed: crm.Project,
         desired: { displayName: string | undefined; labels: Record<string, string> },
+        session: ScopedPlanStatusSession,
       ) {
         const observedLabels = { ...(observed.labels ?? {}) };
         const updateMaskFields: string[] = [];
         if (desired.displayName !== observed.displayName) {
           updateMaskFields.push("display_name");
         }
-        if (!labelsEqual(observedLabels, desired.labels)) {
+        const labelDiff = diffTags(observedLabels, desired.labels);
+        if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) {
           updateMaskFields.push("labels");
         }
 
@@ -227,7 +226,7 @@ export const ProjectProvider = () =>
             labels: desired.labels,
           },
         });
-        if (op.name) yield* awaitOperation(op.name);
+        if (op.name) yield* awaitOperation(op.name, session);
         return yield* requireProject(
           observed.projectId!,
           "disappeared after patch",
@@ -251,7 +250,7 @@ export const ProjectProvider = () =>
             return { action: "replace" } as const;
           }
         }),
-        reconcile: Effect.fn(function* ({ id, news }) {
+        reconcile: Effect.fn(function* ({ id, news, session }) {
           const projectId = yield* createProjectId(id, news.projectId);
           const parent = parentToString(news.parent);
           const internalLabels = yield* gcpInternalLabels(id);
@@ -279,7 +278,7 @@ export const ProjectProvider = () =>
               },
             }).pipe(Effect.catchTag("Conflict", () => Effect.succeed(undefined)));
 
-            if (operation?.name) yield* awaitOperation(operation.name);
+            if (operation?.name) yield* awaitOperation(operation.name, session);
 
             observed = yield* requireProject(
               projectId,
@@ -292,23 +291,33 @@ export const ProjectProvider = () =>
           //    correctly: if a foreign label set is on the project,
           //    the patch will replace it with our desired set
           //    (including alchemy internals).
-          const synced = yield* syncMutable(observed, {
-            displayName: news.displayName ?? observed.displayName,
-            labels: desiredLabels,
-          });
+          const synced = yield* syncMutable(
+            observed,
+            {
+              displayName: news.displayName ?? observed.displayName,
+              labels: desiredLabels,
+            },
+            session,
+          );
 
           return toAttributes(synced);
         }),
-        delete: Effect.fn(function* ({ output }) {
+        delete: Effect.fn(function* ({ output, session }) {
           yield* deleteProjects({ name: `projects/${output.projectId}` }).pipe(
             Effect.flatMap((op) =>
-              op.name ? awaitOperation(op.name) : Effect.succeed(op),
+              op.name ? awaitOperation(op.name, session) : Effect.succeed(op),
             ),
             // Already gone.
             Effect.catchTag("NotFound", () => Effect.void),
             // GCP returns 400 with "Project ... is already in
             // DELETE_REQUESTED" when delete is invoked on an already-
             // soft-deleted project. Treat that as idempotent success.
+            // TODO(distilled): tag this state via patch — see finding 12.
+            // The GCP `matchError` (vendor/distilled/packages/gcp/src/client/api.ts)
+            // currently dispatches purely on HTTP status and ignores the
+            // `message.includes` matcher in the patch JSON, so a per-operation
+            // patch alone can't disambiguate this case from a real 400 without
+            // also extending `matchError` to consult the matchers.
             Effect.catchTag("BadRequest", (e) =>
               /already.*delet|DELETE_REQUESTED/i.test(e.message ?? "")
                 ? Effect.void

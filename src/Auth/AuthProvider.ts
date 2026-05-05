@@ -81,8 +81,8 @@ export const mintToken = (
     }
     const project = yield* Effect.tryPromise({
       try: () => auth.getProjectId(),
-      catch: () => "no-project" as const,
-    }).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
+      catch: () => undefined,
+    }).pipe(Effect.orElseSucceed<string | undefined>(() => undefined));
     return {
       accessToken: Redacted.make(accessToken),
       project: project ?? undefined,

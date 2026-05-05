@@ -175,7 +175,15 @@ export const ProjectProvider = () =>
 
       const observeProject = (projectId: string) =>
         getProjects({ name: `projects/${projectId}` }).pipe(
+          // GCP returns 403 Forbidden (not 404) when a project ID is
+          // unknown or invisible to the caller — a deliberate choice to
+          // avoid leaking project-ID existence across tenants. From this
+          // provider's perspective both shapes mean "not present", so
+          // observation should treat them identically.
           Effect.catchTag("NotFound", () =>
+            Effect.succeed(undefined as crm.Project | undefined),
+          ),
+          Effect.catchTag("Forbidden", () =>
             Effect.succeed(undefined as crm.Project | undefined),
           ),
           // A project marked for deletion is still readable but in

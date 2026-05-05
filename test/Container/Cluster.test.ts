@@ -38,6 +38,12 @@ test.provider(
             projectId,
             parent: { type: "folder", id: FOLDER_ID },
           });
+          // Container API must be enabled before any GKE call works on
+          // a freshly-created project.
+          yield* GCP.ApiEnable("ContainerApi", {
+            project: project.projectId,
+            service: "container.googleapis.com",
+          });
           const cluster = yield* GCP.Cluster("Test", {
             project: project.projectId,
             location: "us-central1-a",

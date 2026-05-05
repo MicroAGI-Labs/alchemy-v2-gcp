@@ -5,6 +5,7 @@ import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
 import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
 import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
+import { ApiEnable, ApiEnableProvider } from "./ServiceUsage/ApiEnable.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("GCP") {}
 
@@ -26,9 +27,17 @@ export type ProviderRequirements = Layer.Services<ReturnType<typeof providers>>;
  * `Cloudflare/Providers.ts`.
  */
 export const providers = () =>
-  Layer.effect(Providers, Provider.collection([Project, Cluster, NodePool])).pipe(
+  Layer.effect(
+    Providers,
+    Provider.collection([Project, Cluster, NodePool, ApiEnable]),
+  ).pipe(
     Layer.provide(
-      Layer.mergeAll(ProjectProvider(), ClusterProvider(), NodePoolProvider()),
+      Layer.mergeAll(
+        ProjectProvider(),
+        ClusterProvider(),
+        NodePoolProvider(),
+        ApiEnableProvider(),
+      ),
     ),
     Layer.provideMerge(fromAuthProvider()),
     Layer.provideMerge(GCPAuth),

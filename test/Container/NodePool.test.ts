@@ -28,6 +28,10 @@ test.provider(
             projectId,
             parent: { type: "folder", id: FOLDER_ID },
           });
+          yield* GCP.ApiEnable("ContainerApi", {
+            project: project.projectId,
+            service: "container.googleapis.com",
+          });
           const cluster = yield* GCP.Cluster("PoolTestCluster", {
             project: project.projectId,
             location: "us-central1-a",

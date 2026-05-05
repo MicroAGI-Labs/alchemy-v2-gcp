@@ -13,7 +13,6 @@ export {
 export type {
   GCPAuthConfig,
   GCPResolvedCredentials,
-  GCPStoredServiceAccount,
 } from "./Auth/AuthProvider.ts";
 export * from "./CloudResourceManager/index.ts";
 
@@ -26,9 +25,10 @@ export type ProviderRequirements = Layer.Services<ReturnType<typeof providers>>;
  * HTTP client into a single Layer suitable for `Alchemy.Stack({ providers })`.
  *
  * Credentials resolve through the Alchemy AuthProvider registry — the active
- * profile (from `ALCHEMY_PROFILE`, default `"default"`) drives the choice of
- * ADC vs service-account-key. To bypass the registry and pin to ADC for a
- * specific quota/billing project, import {@link fromADC} directly.
+ * profile (from `ALCHEMY_PROFILE`, default `"default"`) configures `project`
+ * and optional `keyFile` overrides; everything else (ADC discovery, env-var
+ * key files, metadata server) is delegated to `google-auth-library`. To
+ * bypass the registry, import {@link fromADC} directly.
  */
 export const providers = () =>
   Layer.effect(Providers, Provider.collection([Project])).pipe(

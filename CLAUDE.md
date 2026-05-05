@@ -25,17 +25,18 @@ Implement Alchemy Resources for GCP — initially `Project` (org/folder/billing)
 src/
   index.ts                          # re-export from Providers.ts
   Providers.ts                      # `providers()` Layer; `Providers` collection class
+  Tags.ts                           # GCP-flavored internal labels + ownership check
   Auth/
-    AuthProvider.ts                 # Clank flow for `alchemy login` (env vs ADC vs SA key)
+    AuthProvider.ts                 # Clank flow for `alchemy login` (ADC vs serviceAccountKey)
     Credentials.ts                  # bridge AuthProvider → @distilled.cloud/gcp Credentials
   CloudResourceManager/
     Project.ts                      # `GCP.Project` resource + provider
     index.ts
-  Container/
+  Container/                        # (planned)
     Cluster.ts                      # `GCP.Cluster` (Standard GKE)
     NodePool.ts                     # `GCP.NodePool`
     index.ts
-test/
+test/                               # (planned)
   CloudResourceManager/Project.test.ts
   Container/Cluster.test.ts
   Container/NodePool.test.ts
@@ -45,13 +46,20 @@ The folder name under `src/` matches the GCP API surface (`cloudresourcemanager`
 
 ## Resource skeleton
 
+The actual `Project` provider is at `src/CloudResourceManager/Project.ts`. Its shape:
+
 ```ts
-import * as crm from "@distilled.cloud/gcp/services/cloudresourcemanager-v3";
+import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
 import * as Effect from "effect/Effect";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import type * as GCP from "../Providers.ts";
+
+// Operations are plural in the SDK (createProjects / getProjects /
+// patchProjects / deleteProjects) — reflecting the GCP REST resource
+// path `v3/projects/{projectsId}`. Don't write singular forms; they
+// don't exist.
 
 export type ProjectProps = {
   projectId?: string;          // not Input<…> — must be statically knowable in diff
@@ -63,7 +71,7 @@ export type ProjectProps = {
 export type Project = Resource<
   "GCP.Project",
   ProjectProps,
-  { projectId: string; projectNumber: string; createTime: string; parent: ProjectProps["parent"] },
+  { projectId: string; projectNumber: string; name: string; /* … */ },
   never,                       // no binding contract for now
   GCP.Providers
 >;
@@ -73,42 +81,62 @@ export const ProjectProvider = () =>
   Provider.effect(
     Project,
     Effect.gen(function* () {
-      // Acquire SDK clients ONCE here. They yield from @distilled.cloud/gcp,
-      // which depends on the Credentials service we provide via the AuthProvider bridge.
-      const createProject = yield* crm.createProject;
-      const getProject    = yield* crm.getProject;
-      const updateProject = yield* crm.updateProject;
-      const deleteProject = yield* crm.deleteProject;
+      // Acquire SDK clients ONCE — Credentials and HttpClient are
+      // resolved here at provider construction. Use the captured
+      // callables (e.g. `getProjects(input)`) inside lifecycle handlers
+      // so we don't re-resolve services on every reconcile. This
+      // matches `R2Bucket.ts` / every other alchemy provider.
+      const getProjects = yield* crm.getProjects;
+      const createProjects = yield* crm.createProjects;
+      const patchProjects = yield* crm.patchProjects;
+      const deleteProjects = yield* crm.deleteProjects;
+      const getOperations = yield* crm.getOperations;
 
       return {
-        stables: ["projectId", "projectNumber"],
-        diff: Effect.fn(function* ({ news, olds = {}, output }) {
+        stables: ["projectId", "projectNumber", "name"],
+        diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
-          if ((output?.projectId ?? olds.projectId) !== (news.projectId ?? output?.projectId))
-            return { action: "replace" } as const;
-          // displayName/labels are mutable → fall through to default update
+          // Compare resolved projectId AND parent — both immutable; either
+          // change → `{ action: "replace" }`.
         }),
-        reconcile: Effect.fn(function* ({ id, news, output }) {
-          // 1. Observe — trust the cloud, not output/olds
-          // 2. Ensure — create if missing; tolerate AlreadyExists as a race
-          // 3. Sync   — patch each mutable aspect against OBSERVED state
-          // 4. Return — fresh attributes
+        reconcile: Effect.fn(function* ({ id, news }) {
+          // Always merge alchemy internal labels (alchemy_app /
+          // alchemy_stage / alchemy_id from `gcpInternalLabels`) into
+          // the desired label set so adoption gating in `read` works.
+          //
+          // 1. Observe — getProjects, catchTag NotFound → undefined
+          // 2. Ensure — createProjects returns an LRO; awaitOperation
+          //    polls getOperations until done. catchTag Conflict
+          //    (project pre-exists / state-persistence race) and
+          //    re-observe.
+          // 3. Sync   — patchProjects with an `updateMask` for
+          //    `display_name` / `labels`, diffed against OBSERVED state.
+          // 4. Return — toAttributes(observed)
         }),
         delete: Effect.fn(function* ({ output }) {
-          yield* deleteProject({ name: `projects/${output.projectId}` })
-            .pipe(Effect.catchTag("NotFound", () => Effect.void));
+          yield* deleteProjects({ name: `projects/${output.projectId}` })
+            .pipe(/* awaitOperation, catchTag NotFound, catchTag BadRequest if DELETE_REQUESTED */);
         }),
-        read: Effect.fn(function* ({ output }) {
-          if (!output?.projectId) return undefined;
-          return yield* getProject({ name: `projects/${output.projectId}` }).pipe(
-            Effect.map(p => ({ projectId: p.projectId!, projectNumber: p.projectNumber!, createTime: p.createTime!, parent: output.parent })),
-            Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
-          );
+        read: Effect.fn(function* ({ id, output, olds }) {
+          // observeProject → if absent return undefined.
+          // Otherwise: hasAlchemyLabels(id, observed.labels)
+          //   ? toAttributes(observed)
+          //   : Unowned(toAttributes(observed))
+          // The Unowned brand makes the engine fail the plan unless
+          // the user passes --adopt — important for billing-scoped
+          // projects.
         }),
       };
     }),
   );
 ```
+
+### GCP-specific gotchas
+
+- **Long-running operations.** `createProjects` / `patchProjects` / `deleteProjects` return an `Operation`, not the resource. We poll `getOperations({ name })` with an exponential schedule (`Schedule.exponential(1s, 1.5).pipe(Schedule.both(Schedule.recurs(60)))`) until `done === true`. The success payload lives in `op.response`; failures land in `op.error` as a `Status`.
+- **4xx errors are typed via per-operation distilled patches.** Out of the box, GCP discovery-document operations declare only `DefaultErrors` (the retryable categories: `Unauthorized`, `TooManyRequests`, `InternalServerError`, …) — `NotFound` / `Conflict` / `BadRequest` arrive *tagged* at runtime but are absent from the static error union. Per `vendor/distilled/AGENTS.md`, the proper fix is per-operation patches under `vendor/distilled/packages/gcp/patches/{service}/{operation}.json`. We've added patches for the `cloudresourcemanager` operations we use (`getProjects`, `createProjects`, `patchProjects`, `deleteProjects`, `getOperations`) so `Effect.catchTag("NotFound", …)` typechecks and works at runtime. **When adding a new GCP operation to a provider, add its 4xx tags to the matching patch file and regenerate** with `cd vendor/distilled/packages/gcp && bun run scripts/generate.ts --service <name> --version <vN>`.
+- **`applyErrorMatchers` was broken upstream.** GCP's `traits.ts` originally routed `applyErrorMatchers` through `makeAnnotation`, which calls `.annotate(...)` on the argument — that only works for full Schemas, not the raw AST nodes a `TaggedErrorClass` exposes. The first patched service file blew up at module-load time. We fixed `vendor/distilled/packages/gcp/src/traits.ts` to mirror the Cloudflare approach (direct `cls.ast.annotations[symbol] = matchers`). If you bump the distilled submodule pin and `T.applyErrorMatchers is not a function` resurfaces, port the same fix.
+- **Adoption gating uses internal labels.** `read` returns `Unowned(attrs)` when a project lacks all three of our `alchemy_app` / `alchemy_stage` / `alchemy_id` labels, forcing the user to pass `--adopt` (or wrap with `adopt(true)`) before takeover. Project `reconcile` always merges these internals into the user's labels (alchemy keys are reserved — they overwrite user-supplied values with the same key). The keys use `_` separators because GCP label keys disallow `:` (the alchemy default `alchemy::stack` would be rejected by GCP). See `src/Tags.ts` for `gcpInternalLabels` / `hasAlchemyLabels`.
 
 ## Hard rules (carried over from `vendor/alchemy/AGENTS.md`)
 
@@ -117,41 +145,51 @@ export const ProjectProvider = () =>
 - **Reconciler is one observe → ensure → sync → return flow.** Do **not** branch on `output === undefined` to split create vs update logic. Adoption (`output` defined, `olds` undefined) must traverse the same path.
 - **Cloud state is authoritative.** `olds`/`output` are hints/caches. Re-read tags/labels from the live resource before diffing — never diff against `olds.labels`.
 - **Stable physical names**: don't use `Date.now()`. Use `createPhysicalName` from `alchemy/PhysicalName` or rely on it being generated from `app + stage + id`. For names like `projectId`/`bucketName`/`clusterName` use `string` (not `Input<string>`) so `diff` can read them at plan time.
-- **Tags/labels** — when GCP resources accept labels, brand them with the alchemy internal tags (`createInternalTags(id)`) plus user labels. Diff against observed.
+- **Tags/labels** — when a GCP resource accepts labels, brand it with `gcpInternalLabels(id)` (from `src/Tags.ts`) merged on top of user labels. Alchemy keys (`alchemy_app`/`alchemy_stage`/`alchemy_id`) are reserved and must overwrite any user-supplied collisions. Diff against observed cloud labels, not `olds`.
 - **Idempotent `delete`**: 404/`NotFound` is success.
 
 ## Auth wiring
 
 `@distilled.cloud/gcp` exports a `Credentials` `Context.Service` (`vendor/distilled/packages/gcp/src/credentials.ts`) and a default `CredentialsFromEnv` Layer that reads a static `GOOGLE_ACCESS_TOKEN`. That's wrong for our use case (ADC).
 
-We must:
+### What's implemented today
 
-1. Build an `AuthProvider` (`src/Auth/AuthProvider.ts`) using `AuthProviderLayer<GCPAuthConfig, GCPResolvedCredentials>()("GCP", { configure, login, logout, prettyPrint, read })`. Auth methods: `adc` (default — `gcloud auth application-default login` locally, metadata server in CI) and `serviceAccountKey` (path to JSON, stored via `writeCredentials`).
-2. Build `fromAuthProvider()` (`src/Auth/Credentials.ts`) — a `Layer.effect(Credentials, …)` that reads the active profile, calls `auth.read(profileName, config)`, and returns `{ accessToken, project }` matching the SDK's `Config` interface. **Provide the `Credentials` tag re-exported from `@distilled.cloud/gcp` — do not redeclare a parallel tag**, or the SDK won't see our overrides.
-3. Use `google-auth-library`'s `GoogleAuth.getAccessToken()` (wrapped in `Effect.tryPromise`) inside `read` to mint a short-lived token from ADC. Wrap in `Redacted.make`.
+Two complementary entry points in `src/Auth/`:
+
+- **`AuthProvider.ts`** — `GCPAuth` Layer that registers a `GCP` provider in the alchemy `AuthProviders` registry. Methods are `adc` (default; resolves via `google-auth-library` ADC) and `serviceAccountKey` (configure prompts for a JSON keyfile path; the path is stored in `~/.alchemy/credentials/{profile}/gcp-service-account.json`, the JSON itself stays where the user already has it). CI defaults to `{ method: "adc" }`. `read` mints a fresh access token and resolves a project from the profile config / env / `auth.getProjectId()`.
+- **`Credentials.ts`** — exports two `Credentials` Layers:
+  - `fromAuthProvider()` — bridges the registered `AuthProvider` into the `Credentials` tag re-exported from `@distilled.cloud/gcp`. Resolves the active profile via `ALCHEMY_PROFILE`, calls `loadOrConfigure` (so a missing profile triggers `configure`), then `auth.read`. This is what `providers()` wires by default.
+  - `fromADC(project?)` — direct ADC bridge, no profile resolution. Useful for tests or single-profile stacks that don't want to engage the registry.
+
+Both Layers satisfy the `Credentials` tag *re-exported from `@distilled.cloud/gcp`* — do **not** redeclare a parallel tag, or the SDK won't see our override.
+
+ADC works locally (`gcloud auth application-default login`) and in CI (metadata server / workload identity); `serviceAccountKey` covers the local case where someone already has a key on disk.
 
 ## `providers()` bundle
 
+Actual implementation (`src/Providers.ts`):
+
 ```ts
-// src/Providers.ts
 import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
-import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
-import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("GCP") {}
 export type ProviderRequirements = Layer.Services<ReturnType<typeof providers>>;
 
 export const providers = () =>
-  Layer.effect(Providers, Provider.collection([Project, Cluster, NodePool])).pipe(
-    Layer.provide(Layer.mergeAll(ProjectProvider(), ClusterProvider(), NodePoolProvider())),
+  Layer.effect(Providers, Provider.collection([Project])).pipe(
+    Layer.provide(Layer.mergeAll(ProjectProvider())),
     Layer.provideMerge(fromAuthProvider()),
     Layer.provideMerge(GCPAuth),
+    Layer.provideMerge(FetchHttpClient.layer),
   );
 ```
+
+When `Cluster` / `NodePool` land they slot into the same shape — extend the `Provider.collection([...])` list and the inner `Layer.mergeAll(...)` of `*Provider()`s; the auth/HTTP wiring stays unchanged.
 
 Consumed from `apps/cluster/alchemy.run.ts`:
 
@@ -194,10 +232,15 @@ For file/path access in tests, use `FileSystem.FileSystem` and `Path.Path` from 
 ## Build / typecheck
 
 ```bash
-bun tsc -b           # from research-infra root, type-checks all workspaces
+# from this package (vendor/alchemy-v2-gcp/)
+bunx tsc --noEmit
 ```
 
 This package has no bundling step — `package.json` exports `./src/index.ts` directly. Bun resolves it via the `bun` export condition; Node consumers (the alchemy CLI) will need TypeScript at runtime — that's fine because alchemy's CLI runs `.ts` directly via tsdown's loader. We do **not** ship a `lib/` build.
+
+There is no root `tsconfig.json` in `research-infra/` yet, so `bun tsc -b` from the repo root won't work. Each workspace member typechecks itself. (When all workspaces have `composite: true` we can add a root `tsconfig.json` with `references` and use `tsc -b`.)
+
+Expect ~hundreds of errors out of `vendor/distilled/packages/gcp/src/services/*.ts` when running `tsc` — these are upstream readonly-Schema mismatches that distilled hides by typechecking with `tsgo` (their native compiler) instead of `tsc`. Filter with `grep -E "^src/"` to see only errors in this package.
 
 There is intentionally no `vitest.config.ts` yet — add one only when we wire up the first test. Mirror `vendor/alchemy/packages/alchemy/test/` setup if needed.
 

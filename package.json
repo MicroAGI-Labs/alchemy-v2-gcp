@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@distilled.cloud/gcp": "workspace:*",
-    "alchemy": "2.0.0-beta.30",
+    "alchemy": "workspace:*",
     "effect": "catalog:",
     "google-auth-library": "^10.4.0"
   },

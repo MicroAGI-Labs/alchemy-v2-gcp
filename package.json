@@ -9,11 +9,20 @@
       "default": "./src/index.ts"
     }
   },
+  "scripts": {
+    "test": "CI=1 bun test",
+    "test:watch": "CI=1 bun test --watch"
+  },
   "dependencies": {
     "@distilled.cloud/gcp": "workspace:*",
     "alchemy": "workspace:*",
     "effect": "catalog:",
     "google-auth-library": "^10.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
   },
   "peerDependencies": {
     "effect": "catalog:"

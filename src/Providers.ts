@@ -28,4 +28,9 @@ export const providers = () =>
     Layer.provide(Layer.mergeAll(ProjectProvider())),
     Layer.provideMerge(fromAuthProvider()),
     Layer.provideMerge(GCPAuth),
+    // Auth/config failures (missing ADC, malformed profile) become
+    // unrecoverable defects rather than typed errors — mirrors
+    // `AWS/Providers.ts` and `Cloudflare/Providers.ts`. Resource lifecycle
+    // handlers still surface their own typed errors normally.
+    Layer.orDie,
   );

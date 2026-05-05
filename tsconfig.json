@@ -16,5 +16,5 @@
     "types": ["@types/node"],
     "customConditions": ["bun"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

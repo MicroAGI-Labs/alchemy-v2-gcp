@@ -240,7 +240,7 @@ This package has no bundling step — `package.json` exports `./src/index.ts` di
 
 There is no root `tsconfig.json` in `research-infra/` yet, so `bun tsc -b` from the repo root won't work. Each workspace member typechecks itself. (When all workspaces have `composite: true` we can add a root `tsconfig.json` with `references` and use `tsc -b`.)
 
-Typecheck should be clean (0 errors) under both `tsc` and `@typescript/native-preview` (tsgo). The earlier ~50 readonly-variance errors in `vendor/distilled/packages/gcp/src/services/cloudresourcemanager-v3.ts` are gone — the generator now emits `ReadonlyArray<T>` to match what `Schema.Array(...)` produces (alchemy-run/distilled#259). Our local distilled submodule pin tracks `local/integrate-258-and-259`, which combines the two upstream PRs we depend on (#258 typed 4xx errors + #259 readonly emit). When either PR merges upstream, drop the merge-branch and bump to upstream `main`.
+Typecheck should be clean (0 errors) under `tsc` from `vendor/alchemy-v2-gcp/`. The earlier ~50 readonly-variance errors in `vendor/distilled/packages/gcp/src/services/cloudresourcemanager-v3.ts` are gone — distilled's generator now emits `ReadonlyArray<T>` to match what `Schema.Array(...)` produces (alchemy-run/distilled#259), and the typed 4xx error patches landed in #258. The submodule tracks upstream `main`. (Note: `@typescript/native-preview` (tsgo) currently flags one unrelated overload error in `vendor/alchemy/packages/alchemy/src/AWS/Lambda/Function.ts` that `tsc` accepts — that's an upstream alchemy issue, not ours.)
 
 There is intentionally no `vitest.config.ts` yet — add one only when we wire up the first test. Mirror `vendor/alchemy/packages/alchemy/test/` setup if needed.
 

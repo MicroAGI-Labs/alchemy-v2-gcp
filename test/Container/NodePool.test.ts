@@ -1,0 +1,79 @@
+import * as cont from "@distilled.cloud/gcp/container-v1";
+import * as Test from "alchemy/Test/Bun";
+import * as GCP from "alchemy-v2-gcp";
+import { expect } from "bun:test";
+import * as Effect from "effect/Effect";
+
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+
+const runId = () => Math.random().toString(36).slice(2, 8);
+
+// Cluster create + node pool create + a setSize LRO comfortably fits in
+// 30 minutes; the cluster is the long pole.
+const TIMEOUT = { timeout: 30 * 60 * 1000 };
+
+const { test } = Test.make({ providers: GCP.providers() });
+
+test.provider(
+  "create + resize + delete a node pool",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const projectId = `alchemy-test-${runId()}`;
+
+      const buildGraph = (initialNodeCount: number) =>
+        Effect.gen(function* () {
+          const project = yield* GCP.Project("PoolTestProj", {
+            projectId,
+            parent: { type: "folder", id: FOLDER_ID },
+          });
+          const cluster = yield* GCP.Cluster("PoolTestCluster", {
+            project: project.projectId,
+            location: "us-central1-a",
+            // Bootstrap pool is owned by the cluster. Distinct name from
+            // the GCP.NodePool below so the two don't collide.
+            initialNodePool: {
+              name: "bootstrap",
+              initialNodeCount: 1,
+              config: { machineType: "e2-medium" },
+            },
+          });
+          const pool = yield* GCP.NodePool("system", {
+            project: project.projectId,
+            location: cluster.location,
+            clusterName: cluster.name,
+            initialNodeCount,
+            config: { machineType: "e2-standard-2" },
+          });
+          return { project, cluster, pool };
+        });
+
+      const created = yield* stack.deploy(buildGraph(1));
+      expect(created.pool.name).toBeDefined();
+      expect(created.pool.clusterName).toBe(created.cluster.name);
+      expect(created.pool.location).toBe("us-central1-a");
+      expect(created.pool.status).toBe("RUNNING");
+
+      // Pool gets stamped with its own alchemy labels (keyed against
+      // the pool's logical id "system", distinct from the cluster's id).
+      const fetched = yield* cont.getProjectsLocationsClustersNodePools({
+        name: `projects/${projectId}/locations/us-central1-a/clusters/${created.cluster.name}/nodePools/${created.pool.name}`,
+      });
+      expect(fetched.config?.resourceLabels?.alchemy_id).toBeDefined();
+      expect(fetched.initialNodeCount).toBe(1);
+
+      // Resize path — re-deploy full graph with size 2. Exercises
+      // `setSize` sync without replacing the pool.
+      const resized = yield* stack.deploy(buildGraph(2));
+      expect(resized.pool.name).toBe(created.pool.name);
+
+      const refetched = yield* cont.getProjectsLocationsClustersNodePools({
+        name: `projects/${projectId}/locations/us-central1-a/clusters/${resized.cluster.name}/nodePools/${resized.pool.name}`,
+      });
+      expect(refetched.initialNodeCount).toBe(2);
+
+      yield* stack.destroy();
+    }),
+  TIMEOUT,
+);

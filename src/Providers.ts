@@ -3,6 +3,8 @@ import * as Layer from "effect/Layer";
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
+import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
+import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("GCP") {}
 
@@ -24,8 +26,10 @@ export type ProviderRequirements = Layer.Services<ReturnType<typeof providers>>;
  * `Cloudflare/Providers.ts`.
  */
 export const providers = () =>
-  Layer.effect(Providers, Provider.collection([Project])).pipe(
-    Layer.provide(Layer.mergeAll(ProjectProvider())),
+  Layer.effect(Providers, Provider.collection([Project, Cluster, NodePool])).pipe(
+    Layer.provide(
+      Layer.mergeAll(ProjectProvider(), ClusterProvider(), NodePoolProvider()),
+    ),
     Layer.provideMerge(fromAuthProvider()),
     Layer.provideMerge(GCPAuth),
     // Auth/config failures (missing ADC, malformed profile) become

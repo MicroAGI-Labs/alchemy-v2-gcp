@@ -8,4 +8,5 @@ export type {
   GCPResolvedCredentials,
 } from "./Auth/AuthProvider.ts";
 export * from "./CloudResourceManager/index.ts";
+export * from "./Container/index.ts";
 export * from "./Providers.ts";

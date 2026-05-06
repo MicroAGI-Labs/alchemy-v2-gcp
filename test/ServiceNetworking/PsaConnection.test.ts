@@ -4,7 +4,7 @@ import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
 const BILLING_ACCOUNT = rawBillingAccount?.startsWith("billingAccounts/")
   ? (rawBillingAccount as `billingAccounts/${string}`)
@@ -20,7 +20,8 @@ const TIMEOUT = { timeout: 20 * 60 * 1000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-const runOrSkip = BILLING_ACCOUNT ? test.provider : test.provider.skip;
+const runOrSkip =
+  FOLDER_ID && BILLING_ACCOUNT ? test.provider : test.provider.skip;
 
 runOrSkip(
   "establish PSA connection (network + reserved range + peering) + delete",
@@ -34,7 +35,7 @@ runOrSkip(
         Effect.gen(function* () {
           const project = yield* GCP.Project("PsaTestProj", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           // Two APIs: compute (for the VPC + GlobalAddress) and

@@ -217,7 +217,7 @@ const { test } = Test.make({ providers: GCP.providers() });
 test.provider("create + delete a project", (stack) =>
   Effect.gen(function* () {
     const created = yield* stack.deploy(Effect.gen(function* () {
-      return yield* GCP.Project("TestProj", { parent: { type: "folder", id: "<redacted-folder-id>" }, displayName: "test" });
+      return yield* GCP.Project("TestProj", { parent: { type: "folder", id: "<your-folder-id>" }, displayName: "test" });
     }));
     expect(created.projectId).toBeDefined();
     yield* stack.destroy();
@@ -225,7 +225,7 @@ test.provider("create + delete a project", (stack) =>
 );
 ```
 
-Tests hit real GCP — they require ADC (`gcloud auth application-default login`) and a billing-enabled folder (use `research`, id `<redacted-folder-id>`). Project creates leave a 30-day soft-delete trail; clean up via `gcloud projects undelete` if needed. **No `Date.now()` in physical names** — derive from logical id so reruns hit the same resource.
+Tests hit real GCP — they require ADC (`gcloud auth application-default login`) and a billing-enabled folder (use `research`, id `<your-folder-id>`). Project creates leave a 30-day soft-delete trail; clean up via `gcloud projects undelete` if needed. **No `Date.now()` in physical names** — derive from logical id so reruns hit the same resource.
 
 For file/path access in tests, use `FileSystem.FileSystem` and `Path.Path` from `@effect/platform` — same rule as lifecycle code.
 

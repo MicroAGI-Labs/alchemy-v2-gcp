@@ -4,7 +4,7 @@ import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
 const BILLING_ACCOUNT = rawBillingAccount?.startsWith("billingAccounts/")
   ? (rawBillingAccount as `billingAccounts/${string}`)
@@ -26,7 +26,9 @@ const TIMEOUT = { timeout: 30 * 60 * 1000 };
 const { test } = Test.make({ providers: GCP.providers() });
 
 const runOrSkip =
-  BILLING_ACCOUNT && SHARED_VPC_OPT_IN ? test.provider : test.provider.skip;
+  FOLDER_ID && BILLING_ACCOUNT && SHARED_VPC_OPT_IN
+    ? test.provider
+    : test.provider.skip;
 
 runOrSkip(
   "enable shared-VPC host + attach service project + detach + delete",
@@ -41,12 +43,12 @@ runOrSkip(
         Effect.gen(function* () {
           const hostProject = yield* GCP.Project("HostProj", {
             projectId: hostProjectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           const serviceProject = yield* GCP.Project("SvcProj", {
             projectId: serviceProjectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           // compute.googleapis.com must be enabled on both ends — the

@@ -5,7 +5,7 @@ import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
 // Folder under microagi org (id 622919272632) where research projects live.
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 // `compute.googleapis.com` enable requires billing on the project, so
 // like Cluster.test.ts these tests skip unless a billing account is
 // supplied in the fully-qualified `billingAccounts/{id}` form.
@@ -22,7 +22,8 @@ const TIMEOUT = { timeout: 10 * 60 * 1000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-const runOrSkip = BILLING_ACCOUNT ? test.provider : test.provider.skip;
+const runOrSkip =
+  FOLDER_ID && BILLING_ACCOUNT ? test.provider : test.provider.skip;
 
 runOrSkip(
   "create network + update routingMode + delete",
@@ -39,7 +40,7 @@ runOrSkip(
         Effect.gen(function* () {
           const project = yield* GCP.Project("NetTestProj", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           const computeApi = yield* GCP.ApiEnable("ComputeApi", {

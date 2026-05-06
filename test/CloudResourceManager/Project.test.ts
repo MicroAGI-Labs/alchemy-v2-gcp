@@ -4,9 +4,8 @@ import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
-// Folder under microagi org (id 622919272632) where research projects live.
-// Override via env to point at a different folder for local sandboxes.
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+// Folder where test projects are created. Required — tests skip when unset.
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 
 // GCP project IDs are globally unique forever (soft-deletion holds the ID
 // for ~30 days after delete). Stamp a per-invocation suffix so reruns of
@@ -18,7 +17,9 @@ const TIMEOUT = { timeout: 600_000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-test.provider(
+const runOrSkip = FOLDER_ID ? test.provider : test.provider.skip;
+
+runOrSkip(
   "create and delete project",
   (stack) =>
     Effect.gen(function* () {
@@ -30,7 +31,7 @@ test.provider(
         Effect.gen(function* () {
           return yield* GCP.Project("Smoke", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             displayName: "alchemy smoke",
           });
         }),
@@ -38,7 +39,7 @@ test.provider(
 
       expect(project.projectId).toBe(projectId);
       expect(project.state).toBe("ACTIVE");
-      expect(project.parent).toBe(`folders/${FOLDER_ID}`);
+      expect(project.parent).toBe(`folders/${FOLDER_ID!}`);
       // Internal labels must be applied so `read` recognises ownership.
       expect(project.labels.alchemy_app).toBeDefined();
       expect(project.labels.alchemy_stage).toBe("test");
@@ -68,7 +69,7 @@ test.provider(
         Effect.gen(function* () {
           return yield* GCP.Project("Update", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             displayName: "initial",
           });
         }),
@@ -78,7 +79,7 @@ test.provider(
         Effect.gen(function* () {
           return yield* GCP.Project("Update", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             displayName: "updated",
           });
         }),

@@ -3,7 +3,7 @@ import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
 const BILLING_ACCOUNT = rawBillingAccount?.startsWith("billingAccounts/")
   ? (rawBillingAccount as `billingAccounts/${string}`)
@@ -25,7 +25,9 @@ const ZONE = "us-central1-a";
 const { test } = Test.make({ providers: GCP.providers() });
 
 const runOrSkip =
-  BILLING_ACCOUNT && PARALLELSTORE_OPT_IN ? test.provider : test.provider.skip;
+  FOLDER_ID && BILLING_ACCOUNT && PARALLELSTORE_OPT_IN
+    ? test.provider
+    : test.provider.skip;
 
 runOrSkip(
   "create Parallelstore instance over PSA + delete",
@@ -39,7 +41,7 @@ runOrSkip(
         Effect.gen(function* () {
           const project = yield* GCP.Project("PsTestProj", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           const computeApi = yield* GCP.ApiEnable("ComputeApi", {

@@ -51,7 +51,7 @@ export type ProjectProps = {
   /**
    * Billing account to attach to the project. Must be the
    * fully-qualified resource name `billingAccounts/{id}` (e.g.
-   * `billingAccounts/<redacted-billing>`) — that's what
+   * `billingAccounts/<your-billing-account>`) — that's what
    * `cloudbilling.projects.updateBillingInfo` accepts in
    * `billingAccountName`; passing the bare id returns `400 Request
    * contains an invalid argument`. The prefix is enforced at the
@@ -100,7 +100,7 @@ export type BillingAccountName = `billingAccounts/${string}`;
  * @example Project under a folder
  * ```typescript
  * const project = yield* GCP.Project("Research", {
- *   parent: { type: "folder", id: "<redacted-folder-id>" },
+ *   parent: { type: "folder", id: "<your-folder-id>" },
  *   displayName: "Research Cluster",
  * });
  * ```
@@ -109,7 +109,7 @@ export type BillingAccountName = `billingAccounts/${string}`;
  * ```typescript
  * const project = yield* GCP.Project("Research", {
  *   projectId: "microagi-research-001",
- *   parent: { type: "folder", id: "<redacted-folder-id>" },
+ *   parent: { type: "folder", id: "<your-folder-id>" },
  * });
  * ```
  */

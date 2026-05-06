@@ -4,7 +4,7 @@ import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
-const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID;
 // Must be `billingAccounts/{id}` to match Project.billingAccount's
 // template literal type; bare ids skip these tests.
 const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
@@ -20,7 +20,8 @@ const TIMEOUT = { timeout: 30 * 60 * 1000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-const runOrSkip = BILLING_ACCOUNT ? test.provider : test.provider.skip;
+const runOrSkip =
+  FOLDER_ID && BILLING_ACCOUNT ? test.provider : test.provider.skip;
 
 runOrSkip(
   "create + resize + delete a node pool",
@@ -34,7 +35,7 @@ runOrSkip(
         Effect.gen(function* () {
           const project = yield* GCP.Project("PoolTestProj", {
             projectId,
-            parent: { type: "folder", id: FOLDER_ID },
+            parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
           });
           // Routing the cluster's `project` through `containerApi.project`

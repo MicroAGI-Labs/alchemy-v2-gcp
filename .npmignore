@@ -1,0 +1,14 @@
+.alchemy/
+.ralph/
+.env
+.env.local
+.env.*
+test/
+tsconfig.json
+tsconfig.build.json
+CLAUDE.md
+DISTILLED_CORE_BASE_URL.md
+*.tgz
+.git
+.gitignore
+node_modules/

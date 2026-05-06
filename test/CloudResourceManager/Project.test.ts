@@ -1,6 +1,6 @@
 import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
 import * as Test from "alchemy/Test/Bun";
-import * as GCP from "alchemy-v2-gcp";
+import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 

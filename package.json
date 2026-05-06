@@ -1,30 +1,70 @@
 {
-  "name": "alchemy-v2-gcp",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@microagi/alchemy-gcp",
+  "version": "0.1.0",
+  "description": "GCP provider for Alchemy v2 (Effect-based IaC). Resources for Project, Cluster, NodePool, Parallelstore, Compute, ServiceUsage, ServiceNetworking, with ADC-backed credentials.",
+  "keywords": [
+    "alchemy",
+    "alchemy-effect",
+    "iac",
+    "infrastructure",
+    "effect",
+    "effect-ts",
+    "gcp",
+    "google-cloud",
+    "gke",
+    "kubernetes",
+    "parallelstore",
+    "distilled.cloud"
+  ],
+  "homepage": "https://github.com/MicroAGI-Labs/alchemy-v2-gcp#readme",
+  "bugs": {
+    "url": "https://github.com/MicroAGI-Labs/alchemy-v2-gcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MicroAGI-Labs/alchemy-v2-gcp.git"
+  },
+  "license": "Apache-2.0",
+  "author": "MicroAGI Labs",
   "type": "module",
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js"
     }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf lib",
     "test": "CI=1 bun test",
-    "test:watch": "CI=1 bun test --watch"
+    "test:watch": "CI=1 bun test --watch",
+    "prepublishOnly": "bun run clean && bun run build"
   },
   "dependencies": {
-    "@distilled.cloud/gcp": "workspace:*",
-    "alchemy": "workspace:*",
-    "effect": "catalog:",
     "google-auth-library": "^10.4.0"
   },
-  "devDependencies": {
-    "@types/bun": "catalog:",
-    "@types/node": "catalog:",
-    "typescript": "catalog:"
-  },
   "peerDependencies": {
-    "effect": "catalog:"
+    "@distilled.cloud/gcp": ">=0.16.9",
+    "alchemy": ">=2.0.0-beta.30",
+    "effect": ">=4.0.0-beta.60 || >=4.0.0"
+  },
+  "devDependencies": {
+    "@distilled.cloud/gcp": "workspace:*",
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "alchemy": "workspace:*",
+    "effect": ">=4.0.0-beta.60 || >=4.0.0",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

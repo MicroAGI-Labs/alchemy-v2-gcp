@@ -1,6 +1,6 @@
 {
   "name": "@microagi/alchemy-gcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GCP provider for Alchemy v2 (Effect-based IaC). Resources for Project, Cluster, NodePool, Parallelstore, Compute, ServiceUsage, ServiceNetworking, with ADC-backed credentials.",
   "keywords": [
     "alchemy",

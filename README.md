@@ -7,12 +7,14 @@ Resources are implemented against [`@distilled.cloud/gcp`](https://github.com/al
 ## Install
 
 ```sh
-bun add @microagi/alchemy-gcp alchemy @distilled.cloud/gcp effect
+bun add @microagi/alchemy-gcp alchemy@next @distilled.cloud/gcp effect
 # or
-npm install @microagi/alchemy-gcp alchemy @distilled.cloud/gcp effect
+npm install @microagi/alchemy-gcp alchemy@next @distilled.cloud/gcp effect
 ```
 
 `alchemy`, `@distilled.cloud/gcp`, and `effect` are peer dependencies — they must resolve to a single instance in your dependency tree so that the `Credentials` `Context.Service` tag identity is preserved.
+
+The `next` dist-tag is required for `alchemy` because `latest` still points at the v1 line (`0.93.x`); v2 betas live under `next`.
 
 ## Authenticate
 
@@ -27,13 +29,14 @@ A `serviceAccountKey` flow is also wired through `alchemy login`.
 
 ```ts
 import * as Alchemy from "alchemy";
+import { inMemoryState } from "alchemy/State";
 import * as Effect from "effect/Effect";
 import * as GCP from "@microagi/alchemy-gcp";
 
 await Alchemy.run(
   Alchemy.Stack(
     "research",
-    { providers: GCP.providers() },
+    { providers: GCP.providers(), state: inMemoryState() },
     Effect.gen(function* () {
       const project = yield* GCP.Project("ResearchProj", {
         parent: { type: "folder", id: "<redacted-folder-id>" },
@@ -58,6 +61,8 @@ await Alchemy.run(
   ),
 );
 ```
+
+`inMemoryState()` works for examples and tests. For real deployments, swap it for `localState()` (file-backed) or `httpStateStore()` (server-backed) — see [`alchemy/State`](https://v2.alchemy.run/concepts/state).
 
 Long-running operations (`createProjects`, `patchProjects`, GKE cluster ops) are polled internally; reconcilers follow the [Alchemy reconciler doctrine](https://v2.alchemy.run/concepts/resource-lifecycle) (single observe → ensure → sync → return flow that converges from any starting state, including adoption).
 

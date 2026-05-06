@@ -11,7 +11,14 @@ const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
 // container.googleapis.com refuses to enable on a project without
 // billing. No default — must be set explicitly to avoid charging an
 // arbitrary account; tests that need it are skipped otherwise.
-const BILLING_ACCOUNT = process.env.GCP_TEST_BILLING_ACCOUNT;
+//
+// Must be the fully-qualified `billingAccounts/{id}` form — the
+// `Project.billingAccount` prop is typed `\`billingAccounts/${string}\``
+// and unprefixed values would be a runtime 400 from cloudbilling.
+const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
+const BILLING_ACCOUNT = rawBillingAccount?.startsWith("billingAccounts/")
+  ? (rawBillingAccount as `billingAccounts/${string}`)
+  : undefined;
 
 // GCP project IDs are globally unique forever (soft-deletion holds the ID
 // for ~30 days after delete). Stamp a per-invocation suffix so reruns of

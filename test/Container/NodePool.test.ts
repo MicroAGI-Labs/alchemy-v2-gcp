@@ -5,7 +5,12 @@ import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
 const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
-const BILLING_ACCOUNT = process.env.GCP_TEST_BILLING_ACCOUNT;
+// Must be `billingAccounts/{id}` to match Project.billingAccount's
+// template literal type; bare ids skip these tests.
+const rawBillingAccount = process.env.GCP_TEST_BILLING_ACCOUNT;
+const BILLING_ACCOUNT = rawBillingAccount?.startsWith("billingAccounts/")
+  ? (rawBillingAccount as `billingAccounts/${string}`)
+  : undefined;
 
 const runId = () => Math.random().toString(36).slice(2, 8);
 

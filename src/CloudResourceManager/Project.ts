@@ -49,10 +49,17 @@ export type ProjectProps = {
    */
   labels?: Record<string, string>;
   /**
-   * Billing account to attach to the project, in the form
-   * `billingAccounts/XXXXXX-YYYYYY-ZZZZZZ`. Required for any paid API
-   * (GKE, Compute, etc.) — fresh projects have no billing account by
-   * default and refuse to enable paid services until one is attached.
+   * Billing account to attach to the project. Must be the
+   * fully-qualified resource name `billingAccounts/{id}` (e.g.
+   * `billingAccounts/<redacted-billing>`) — that's what
+   * `cloudbilling.projects.updateBillingInfo` accepts in
+   * `billingAccountName`; passing the bare id returns `400 Request
+   * contains an invalid argument`. The prefix is enforced at the
+   * type level here so the wrong shape fails at compile time.
+   *
+   * Required for any paid API (GKE, Compute, etc.) — fresh projects
+   * have no billing account by default and refuse to enable paid
+   * services until one is attached.
    *
    * Mutable via `cloudbilling.projects.updateBillingInfo`. Set to
    * `undefined` (omit) on a project that previously had billing
@@ -65,8 +72,16 @@ export type ProjectProps = {
    * precondition as `cloudresourcemanager.googleapis.com` for project
    * creation, so if you can create projects you can attach billing.
    */
-  billingAccount?: string;
+  billingAccount?: BillingAccountName;
 };
+
+/**
+ * Fully-qualified billing-account resource name. The
+ * `billingAccounts/` prefix is the form GCP's APIs return and accept;
+ * encoding it at the type level rules out the bare-id mistake at
+ * compile time.
+ */
+export type BillingAccountName = `billingAccounts/${string}`;
 
 /**
  * A GCP project under an organization or folder.
@@ -123,7 +138,7 @@ export type Project = Resource<
      * `billingAccounts/XXXXXX-YYYYYY-ZZZZZZ`), or `undefined` when none
      * is attached.
      */
-    billingAccount: string | undefined;
+    billingAccount: BillingAccountName | undefined;
     /**
      * Whether the project is associated with an *open* billing account.
      * `false` when no billing account is attached or the attached
@@ -163,7 +178,11 @@ const toAttributes = (
   parent: p.parent ?? "",
   createTime: p.createTime,
   labels: { ...(p.labels ?? {}) },
-  billingAccount: billingInfo?.billingAccountName || undefined,
+  // GCP returns `billingAccountName` as a plain string but its format
+  // is always `billingAccounts/{id}` — narrow at the boundary.
+  billingAccount: (billingInfo?.billingAccountName || undefined) as
+    | BillingAccountName
+    | undefined,
   billingEnabled: billingInfo?.billingEnabled ?? false,
 });
 

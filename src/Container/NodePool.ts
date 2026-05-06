@@ -8,7 +8,7 @@ import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
-import { makeAwaitOperation } from "./Operations.ts";
+import { makeAwaitOperation, qualifyOperationName } from "./Operations.ts";
 
 export type NodePoolProps = {
   /** GCP project ID. Immutable — replace if changed. */
@@ -374,6 +374,18 @@ export const NodePoolProvider = () =>
       const getOperations = yield* cont.getProjectsLocationsOperations;
       const awaitOperation = makeAwaitOperation(getOperations);
 
+      // Qualify a bare GKE operation id using the parent path of the
+      // resource it targets. NodePool fqNames have the shape
+      // `projects/{p}/locations/{l}/clusters/{c}/nodePools/{n}`; the
+      // first four segments give us the parent context for the
+      // operation, identical to Cluster's helper.
+      const qualifyOp = (fqName: string, opName: string) =>
+        qualifyOperationName(
+          fqName.split("/")[1],
+          fqName.split("/")[3],
+          opName,
+        );
+
       const syncNodePoolSize = Effect.fn(function* (args: {
         fqName: string;
         observed: cont.NodePool;
@@ -389,7 +401,7 @@ export const NodePoolProvider = () =>
           name: args.fqName,
           body: { nodeCount: args.news.initialNodeCount },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncNodePoolAutoscaling = Effect.fn(function* (args: {
@@ -404,7 +416,7 @@ export const NodePoolProvider = () =>
           name: args.fqName,
           body: { autoscaling: args.news.autoscaling },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncNodePoolManagement = Effect.fn(function* (args: {
@@ -419,7 +431,7 @@ export const NodePoolProvider = () =>
           name: args.fqName,
           body: { management: args.news.management },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncNodePoolUpdate = Effect.fn(function* (args: {
@@ -441,7 +453,7 @@ export const NodePoolProvider = () =>
             name: args.fqName,
             body: { locations: args.news.nodeLocations },
           });
-          if (op.name) yield* awaitOperation(op.name, args.session);
+          if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
         }
 
         // 2. Re-observe so the non-location update diffs against fresh
@@ -452,7 +464,7 @@ export const NodePoolProvider = () =>
         if (!body) return;
 
         const op = yield* updateNodePools({ name: args.fqName, body });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       return {
@@ -542,7 +554,7 @@ export const NodePoolProvider = () =>
                 Effect.succeed(undefined as cont.Operation | undefined),
               ),
             );
-            if (op?.name) yield* awaitOperation(op.name, session);
+            if (op?.name) yield* awaitOperation(qualifyOp(fqName, op.name), session);
             observed = yield* getNodePools({ name: fqName });
           }
 
@@ -569,7 +581,9 @@ export const NodePoolProvider = () =>
           const fqName = `projects/${output.project}/locations/${output.location}/clusters/${output.clusterName}/nodePools/${output.name}`;
           yield* deleteNodePools({ name: fqName }).pipe(
             Effect.flatMap((op) =>
-              op.name ? awaitOperation(op.name, session) : Effect.succeed(op),
+              op.name
+                ? awaitOperation(qualifyOp(fqName, op.name), session)
+                : Effect.succeed(op),
             ),
             Effect.catchTag("NotFound", () => Effect.void),
           );

@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 import { type NodePoolProps, toNodeConfigCreateBody } from "./NodePool.ts";
-import { makeAwaitOperation } from "./Operations.ts";
+import { makeAwaitOperation, qualifyOperationName } from "./Operations.ts";
 
 /**
  * Spec for the bootstrap node pool created inline with the cluster.
@@ -266,6 +266,18 @@ export const ClusterProvider = () =>
       const getOperations = yield* cont.getProjectsLocationsOperations;
       const awaitOperation = makeAwaitOperation(getOperations);
 
+      // Qualify a bare operation id using the parent path of the
+      // resource it targets — every fqName in this provider has the
+      // shape `projects/{p}/locations/{l}/clusters/{c}`, so the first
+      // four segments give us the parent context. Avoids threading
+      // project/location through every sync helper's args type.
+      const qualifyOp = (fqName: string, opName: string) =>
+        qualifyOperationName(
+          fqName.split("/")[1],
+          fqName.split("/")[3],
+          opName,
+        );
+
       const syncClusterLabels = Effect.fn(function* (args: {
         fqName: string;
         observed: cont.Cluster;
@@ -282,7 +294,7 @@ export const ClusterProvider = () =>
             labelFingerprint: args.observed.labelFingerprint,
           },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterAddons = Effect.fn(function* (args: {
@@ -297,7 +309,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { addonsConfig: args.news.addonsConfig },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterMaintenance = Effect.fn(function* (args: {
@@ -312,7 +324,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { maintenancePolicy: args.news.maintenancePolicy },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterLocations = Effect.fn(function* (args: {
@@ -327,7 +339,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { locations: args.news.nodeLocations },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterNetworkPolicy = Effect.fn(function* (args: {
@@ -342,7 +354,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { networkPolicy: args.news.networkPolicy },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterLogging = Effect.fn(function* (args: {
@@ -357,7 +369,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { loggingService: args.news.loggingService },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       const syncClusterMonitoring = Effect.fn(function* (args: {
@@ -372,7 +384,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { monitoringService: args.news.monitoringService },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       // Catch-all generic update for fields without dedicated setters:
@@ -403,7 +415,7 @@ export const ClusterProvider = () =>
           name: args.fqName,
           body: { update },
         });
-        if (op.name) yield* awaitOperation(op.name, args.session);
+        if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
 
       return {
@@ -500,7 +512,7 @@ export const ClusterProvider = () =>
                 Effect.succeed(undefined as cont.Operation | undefined),
               ),
             );
-            if (op?.name) yield* awaitOperation(op.name, session);
+            if (op?.name) yield* awaitOperation(qualifyOp(fqName, op.name), session);
             observed = yield* getClusters({ name: fqName });
           }
 
@@ -533,7 +545,9 @@ export const ClusterProvider = () =>
           const fqName = `projects/${output.project}/locations/${output.location}/clusters/${output.name}`;
           yield* deleteClusters({ name: fqName }).pipe(
             Effect.flatMap((op) =>
-              op.name ? awaitOperation(op.name, session) : Effect.succeed(op),
+              op.name
+                ? awaitOperation(qualifyOp(fqName, op.name), session)
+                : Effect.succeed(op),
             ),
             Effect.catchTag("NotFound", () => Effect.void),
           );

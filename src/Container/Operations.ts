@@ -6,6 +6,26 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
 /**
+ * Qualify a GKE operation name. The Container API returns
+ * `Operation.name` as a bare ID like `operation-1778057673333-...`,
+ * but `getProjectsLocationsOperations` expects the fully-qualified
+ * path `projects/{p}/locations/{l}/operations/{id}`. Already-qualified
+ * names are passed through unchanged so callers can stay agnostic.
+ *
+ * (CRM operations don't need this because CRM returns names as
+ * `operations/...` and its `getOperations` takes the bare path
+ * directly.)
+ */
+export const qualifyOperationName = (
+  project: string,
+  location: string,
+  name: string,
+): string =>
+  name.startsWith("projects/")
+    ? name
+    : `projects/${project}/locations/${location}/operations/${name}`;
+
+/**
  * Resolved callable signature of `cont.getProjectsLocationsOperations`.
  *
  * `cont.getProjectsLocationsOperations` is itself an

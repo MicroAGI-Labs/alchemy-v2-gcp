@@ -4,6 +4,7 @@ import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
+import * as Output from "alchemy/Output";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import {
@@ -25,7 +26,9 @@ import { makeAwaitGlobalOperation } from "./Operations.ts";
  *
  * ```typescript
  * const ref = networkRef(project.projectNumber, vpc.name);
- * // typed as NetworkRef, accepted by GCP.PsaConnection / GCP.ParallelstoreInstance
+ * // typed as Output<NetworkRef>, accepted by GCP.PsaConnection /
+ * // GCP.ParallelstoreInstance via the Resource constructor's
+ * // InputProps widening.
  * ```
  *
  * `Project.projectNumber` is typed as `` `${number}` `` precisely so
@@ -35,15 +38,30 @@ import { makeAwaitGlobalOperation } from "./Operations.ts";
 export type NetworkRef = `projects/${number}/global/networks/${string}`;
 
 /**
- * Build a project-number-form `NetworkRef`. The TS shape of
- * `projectNumber` (`` `${number}` ``) prevents accidentally passing
- * `Project.projectId` here.
+ * Build a project-number-form `NetworkRef`. Lifted through `Output`
+ * so it composes with `Project.projectNumber` (an `Output<\`${number}\`>`)
+ * and `Network.name` (an `Output<string>`) coming from other resource
+ * constructors. The `` `${number}` `` argument type prevents
+ * accidentally passing `Project.projectId` here — TS rejects strings
+ * that don't match the numeric shape.
+ *
+ * Plain literal arguments still work: `networkRef("415104041262", "main")`
+ * is wrapped via `Output.asOutput` and resolves immediately at apply
+ * time.
  */
 export const networkRef = (
-  projectNumber: `${number}`,
-  networkName: string,
-): NetworkRef =>
-  `projects/${projectNumber}/global/networks/${networkName}` as NetworkRef;
+  projectNumber: `${number}` | Output.Output<`${number}`>,
+  networkName: string | Output.Output<string>,
+): Output.Output<NetworkRef> =>
+  Output.all(
+    Output.asOutput(projectNumber),
+    Output.asOutput(networkName),
+  ).pipe(
+    Output.map(
+      ([num, name]) =>
+        `projects/${num}/global/networks/${name}` as NetworkRef,
+    ),
+  );
 
 /**
  * A VPC Network in custom-mode (`autoCreateSubnetworks=false`). Auto-mode

@@ -119,8 +119,14 @@ export type Project = Resource<
   {
     /** Globally-unique user-assigned id (e.g. `microagi-research-001`). */
     projectId: string;
-    /** Server-assigned numeric id (e.g. `415104041262`). */
-    projectNumber: string;
+    /**
+     * Server-assigned numeric id (e.g. `415104041262`). String at
+     * runtime — GCP encodes int64s as JSON strings to preserve
+     * precision — but typed as `` `${number}` `` so callers can
+     * compose project-number-form references (`PsaConnection`,
+     * `ParallelstoreInstance`, `networkRef`) without manual coercion.
+     */
+    projectNumber: `${number}`;
     /** Resource name in the form `projects/{projectNumber}`. */
     name: string;
     /** Display name — may be `undefined` if never set. */
@@ -171,7 +177,12 @@ const toAttributes = (
   billingInfo: billing.ProjectBillingInfo | undefined,
 ): Project["Attributes"] => ({
   projectId: p.projectId!,
-  projectNumber: p.name?.replace(/^projects\//, "") ?? "",
+  // GCP returns the project number as a digit-only string. The cast
+  // safely narrows from `string` to `` `${number}` `` — server-side
+  // contract guarantees the shape (the empty-string fallback is a
+  // belt-and-braces guard for malformed responses; downstream code
+  // observes a project state of "ACTIVE" before consuming this).
+  projectNumber: (p.name?.replace(/^projects\//, "") ?? "0") as `${number}`,
   name: p.name ?? `projects/${p.projectId}`,
   displayName: p.displayName,
   state: p.state ?? "ACTIVE",

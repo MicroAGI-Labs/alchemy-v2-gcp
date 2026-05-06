@@ -7,6 +7,7 @@ import * as Provider from "alchemy/Provider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
+import type { NetworkRef } from "../Compute/Network.ts";
 import type * as GCP from "../Providers.ts";
 
 /**
@@ -37,26 +38,29 @@ import type * as GCP from "../Providers.ts";
  *   prefixLength: 20,
  * });
  *
- * // Then peer.
+ * // Then peer. `networkRef` enforces the project-number form at the
+ * // type level — `Project.projectNumber` is typed as `${number}` so
+ * // this composes without manual casts.
  * yield* GCP.PsaConnection("Psa", {
- *   network: `projects/${hostProject.projectNumber}/global/networks/${vpc.name}`,
+ *   network: GCP.networkRef(hostProject.projectNumber, vpc.name),
  *   reservedPeeringRanges: [psaRange.name],
  * });
  * ```
  *
- * Note the `network` format requires the host project's **project
- * number** (numeric server-assigned id), not its project ID. The
- * service producer's GCP backend resolves peerings against numbers
- * because they're stable across project rename. `GCP.Project` exposes
- * both — use `project.projectNumber` here.
+ * The `network` field is typed as `NetworkRef` —
+ * `projects/{projectNumber}/global/networks/{name}` — because the
+ * service producer's backend resolves peerings against the numeric
+ * project id, not the project id string. Use `networkRef` to build
+ * the value; passing a project ID will fail to typecheck.
  */
 export type PsaConnectionProps = {
   /**
-   * Fully-qualified consumer VPC: `projects/{projectNumber}/global/networks/{name}`.
-   * **Project number, not ID** — see the resource JSDoc for why.
-   * Immutable — replace.
+   * Fully-qualified consumer VPC in project-number form. Build with
+   * `networkRef(project.projectNumber, vpc.name)` from `Compute/Network.ts`
+   * — that helper composes the right shape and the type system rejects
+   * passing a project ID. Immutable — replace.
    */
-  network: string;
+  network: NetworkRef;
   /**
    * Service Networking service. Defaults to `servicenetworking.googleapis.com`
    * (the only producer that PSA-aware GCP services like Parallelstore,
@@ -75,7 +79,7 @@ export type PsaConnectionProps = {
 
 export type PsaConnectionAttributes = {
   /** Consumer VPC URL, threaded through from props. */
-  network: string;
+  network: NetworkRef;
   /** `services/<service>` resource name, threaded through from props. */
   serviceName: string;
   /** Server-assigned peering name (e.g. `servicenetworking-googleapis-com`). */

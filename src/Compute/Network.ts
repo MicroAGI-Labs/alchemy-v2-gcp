@@ -15,6 +15,37 @@ import type * as GCP from "../Providers.ts";
 import { makeAwaitGlobalOperation } from "./Operations.ts";
 
 /**
+ * Fully-qualified VPC reference in **project-number** form:
+ * `projects/{projectNumber}/global/networks/{name}`.
+ *
+ * Several GCP service-producer APIs (servicenetworking PSA,
+ * Parallelstore) require this exact shape — the *project number*, not
+ * project ID — because they resolve peerings against numeric ids that
+ * are stable across project renames. Compose with `networkRef`:
+ *
+ * ```typescript
+ * const ref = networkRef(project.projectNumber, vpc.name);
+ * // typed as NetworkRef, accepted by GCP.PsaConnection / GCP.ParallelstoreInstance
+ * ```
+ *
+ * `Project.projectNumber` is typed as `` `${number}` `` precisely so
+ * this template literal type composes without a runtime coercion at
+ * the call site.
+ */
+export type NetworkRef = `projects/${number}/global/networks/${string}`;
+
+/**
+ * Build a project-number-form `NetworkRef`. The TS shape of
+ * `projectNumber` (`` `${number}` ``) prevents accidentally passing
+ * `Project.projectId` here.
+ */
+export const networkRef = (
+  projectNumber: `${number}`,
+  networkName: string,
+): NetworkRef =>
+  `projects/${projectNumber}/global/networks/${networkName}` as NetworkRef;
+
+/**
  * A VPC Network in custom-mode (`autoCreateSubnetworks=false`). Auto-mode
  * networks are intentionally not exposed — every cluster/parallelstore
  * deployment in this provider expects explicit subnets in known regions.

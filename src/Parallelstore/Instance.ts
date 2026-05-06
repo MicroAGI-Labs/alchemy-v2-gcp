@@ -10,6 +10,7 @@ import { diffTags } from "alchemy/Tags";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
+import type { NetworkRef } from "../Compute/Network.ts";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 
@@ -41,7 +42,7 @@ import type * as GCP from "../Providers.ts";
  *   project: hostProject.projectId,
  *   location: "us-central1-a",
  *   capacityGib: "20480",
- *   network: `projects/${hostProject.projectNumber}/global/networks/${vpc.name}`,
+ *   network: GCP.networkRef(hostProject.projectNumber, vpc.name),
  *   reservedIpRange: psaRange.name,
  *   deploymentType: "SCRATCH",
  *   fileStripeLevel: "FILE_STRIPE_LEVEL_BALANCED",
@@ -72,11 +73,12 @@ export type ParallelstoreInstanceProps = {
    */
   capacityGib: string;
   /**
-   * Fully-qualified consumer VPC: `projects/{projectNumber}/global/networks/{name}`.
-   * Project number, not ID — same gotcha as `GCP.PsaConnection`.
-   * Immutable — replace.
+   * Fully-qualified consumer VPC in project-number form. Build with
+   * `networkRef(project.projectNumber, vpc.name)` — the `NetworkRef`
+   * template literal type rejects project-ID-form strings at compile
+   * time. Immutable — replace.
    */
-  network: string;
+  network: NetworkRef;
   /**
    * Name (or self-link) of a `GCP.GlobalAddress` PSA reservation in
    * the same VPC. Immutable — replace.
@@ -115,8 +117,8 @@ export type ParallelstoreInstanceAttributes = {
   description: string | undefined;
   /** Capacity in GiB. */
   capacityGib: string;
-  /** Consumer VPC URL. */
-  network: string;
+  /** Consumer VPC URL (project-number form). */
+  network: NetworkRef;
   /** Reserved IP range used (server-resolved). */
   reservedIpRange: string | undefined;
   /** Effective reserved range (post-allocation). */
@@ -144,7 +146,12 @@ export const ParallelstoreInstance = Resource<ParallelstoreInstance>(
 
 const toAttributes = (
   i: ps.Instance,
-  parent: { project: string; location: string; instanceId: string },
+  parent: {
+    project: string;
+    location: string;
+    instanceId: string;
+    network: NetworkRef;
+  },
 ): ParallelstoreInstanceAttributes => ({
   instanceId: parent.instanceId,
   project: parent.project,
@@ -152,7 +159,12 @@ const toAttributes = (
   name: i.name ?? `projects/${parent.project}/locations/${parent.location}/instances/${parent.instanceId}`,
   description: i.description,
   capacityGib: i.capacityGib ?? "",
-  network: i.network ?? "",
+  // The server-echoed `i.network` matches what we sent up at create
+  // time, but we thread `parent.network` through to preserve the
+  // `NetworkRef` type without a cast — same pattern as project /
+  // location, both of which would otherwise lose their typing through
+  // the SDK's `string | undefined` fields.
+  network: parent.network,
   reservedIpRange: i.reservedIpRange,
   effectiveReservedIpRange: i.effectiveReservedIpRange,
   state: i.state,
@@ -318,6 +330,7 @@ export const ParallelstoreInstanceProvider = () =>
             project: news.project,
             location: news.location,
             instanceId: desiredId,
+            network: news.network,
           });
         }),
         delete: Effect.fn(function* ({ output, session }) {
@@ -331,14 +344,24 @@ export const ParallelstoreInstanceProvider = () =>
         read: Effect.fn(function* ({ id, output, olds }) {
           const project = output?.project ?? olds?.project;
           const location = output?.location ?? olds?.location;
-          if (!project || !location) return undefined;
+          // `network` only narrows to NetworkRef when it comes from
+          // post-create `output`. `olds` is the snapshot of *props*
+          // including a NetworkRef, so both feed into the same typed
+          // pipeline.
+          const network = output?.network ?? olds?.network;
+          if (!project || !location || !network) return undefined;
           const instanceId =
             output?.instanceId ??
             olds?.instanceId ??
             (yield* createPhysicalName({ id, maxLength: 63 })).toLowerCase();
           const observed = yield* observe(project, location, instanceId);
           if (!observed) return undefined;
-          const attrs = toAttributes(observed, { project, location, instanceId });
+          const attrs = toAttributes(observed, {
+            project,
+            location,
+            instanceId,
+            network,
+          });
           return (yield* hasAlchemyLabels(id, observed.labels))
             ? attrs
             : Unowned(attrs);

@@ -5,7 +5,9 @@ import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { deepEqual, isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 import { type NodePoolProps, toNodeConfigCreateBody } from "./NodePool.ts";
@@ -476,6 +478,14 @@ export const ClusterProvider = () =>
               news.initialNodePool,
               internalLabels,
             );
+            // GKE create can fire faster than ApiEnable's effect
+            // propagates: GCP returns 403 with "Kubernetes Engine API
+            // has not been used in project ... If you enabled this
+            // API recently, wait a few minutes …" even when the
+            // ApiEnable LRO has reported DONE. Retry the *create call*
+            // (not the LRO poll, which doesn't run until create
+            // succeeds) on this specific 403 for ~5 minutes; other
+            // Forbidden cases propagate normally.
             const op = yield* createClusters({
               parent,
               body: {
@@ -508,6 +518,19 @@ export const ClusterProvider = () =>
                 },
               },
             }).pipe(
+              Effect.retry({
+                while: (e: { _tag?: string; message?: string }) =>
+                  e?._tag === "Forbidden" &&
+                  /enabled this API recently|has not been used/i.test(e.message ?? ""),
+                schedule: Schedule.spaced(Duration.seconds(15)).pipe(
+                  Schedule.both(Schedule.recurs(20)), // 20 × 15s ≈ 5 min
+                  Schedule.tapOutput(() =>
+                    session.note(
+                      "Waiting for Container API enablement to propagate…",
+                    ),
+                  ),
+                ),
+              }),
               Effect.catchTag("Conflict", () =>
                 Effect.succeed(undefined as cont.Operation | undefined),
               ),

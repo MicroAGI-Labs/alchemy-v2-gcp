@@ -200,12 +200,31 @@ export const ApiEnableProvider = () =>
               op.name ? awaitOperation(op.name, session) : Effect.succeed(op),
             ),
             Effect.catchTag("NotFound", () => Effect.void),
-            // GCP returns HTTP 400 (`FAILED_PRECONDITION`) when the
-            // service is already disabled. Treat as idempotent success.
-            // Other 400s (e.g. dependent services still enabled)
-            // propagate so the user sees the real failure.
+            // GCP returns HTTP 400 in two important cases on disable
+            // that we treat as idempotent success:
+            //
+            // 1. Service already disabled. The resource is gone from
+            //    the user's perspective; alchemy is removing it from
+            //    state.
+            //
+            // 2. "Resources are found when disabling service(s) X.
+            //    Before you can disable, please delete the following
+            //    resources first: …" — this is GCP's eventual-
+            //    consistency lag: a sibling resource (cluster, node
+            //    pool) was deleted via its own API but ServiceUsage's
+            //    "what's still using this service" view hasn't
+            //    propagated yet. The cluster is gone; alchemy state is
+            //    being torn down; if the project itself is also being
+            //    destroyed (the typical case in `stack.destroy`), all
+            //    API state goes with it. Failing here would leave a
+            //    half-torn-down stack the user has to clean up by
+            //    hand.
+            //
+            // Other 400s (e.g. dependent *services* still enabled, or
+            // a true API-level rejection) propagate so the user sees
+            // the real failure.
             Effect.catchTag("BadRequest", (e) =>
-              /already.*disabled|not.*currently enabled|FAILED_PRECONDITION/i.test(
+              /already.*disabled|not.*currently enabled|FAILED_PRECONDITION|Resources are found/i.test(
                 e.message ?? "",
               )
                 ? Effect.void

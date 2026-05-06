@@ -1,4 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
+import * as billing from "@distilled.cloud/gcp/cloudbilling-v1";
 import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
@@ -47,6 +48,24 @@ export type ProjectProps = {
    * to gate `read`-time adoption — do not set those keys yourself.
    */
   labels?: Record<string, string>;
+  /**
+   * Billing account to attach to the project, in the form
+   * `billingAccounts/XXXXXX-YYYYYY-ZZZZZZ`. Required for any paid API
+   * (GKE, Compute, etc.) — fresh projects have no billing account by
+   * default and refuse to enable paid services until one is attached.
+   *
+   * Mutable via `cloudbilling.projects.updateBillingInfo`. Set to
+   * `undefined` (omit) on a project that previously had billing
+   * attached and the resource will detach billing on next reconcile,
+   * which stops paid services on the project — be deliberate.
+   *
+   * The `cloudbilling.googleapis.com` API must be enabled on the
+   * caller's ADC quota project (typically the user's primary
+   * project), not on this target project. This is the same
+   * precondition as `cloudresourcemanager.googleapis.com` for project
+   * creation, so if you can create projects you can attach billing.
+   */
+  billingAccount?: string;
 };
 
 /**
@@ -99,6 +118,19 @@ export type Project = Resource<
     createTime: string | undefined;
     /** Labels currently set on the project, including `alchemy_*` internals. */
     labels: Record<string, string>;
+    /**
+     * Billing account currently attached to the project (e.g.
+     * `billingAccounts/XXXXXX-YYYYYY-ZZZZZZ`), or `undefined` when none
+     * is attached.
+     */
+    billingAccount: string | undefined;
+    /**
+     * Whether the project is associated with an *open* billing account.
+     * `false` when no billing account is attached or the attached
+     * account is closed; `true` once an open account is attached and
+     * paid services can be enabled.
+     */
+    billingEnabled: boolean;
   },
   never,
   GCP.Providers
@@ -119,7 +151,10 @@ const createProjectId = (id: string, override: string | undefined) =>
     return (yield* createPhysicalName({ id, maxLength: 30 })).toLowerCase();
   });
 
-const toAttributes = (p: crm.Project): Project["Attributes"] => ({
+const toAttributes = (
+  p: crm.Project,
+  billingInfo: billing.ProjectBillingInfo | undefined,
+): Project["Attributes"] => ({
   projectId: p.projectId!,
   projectNumber: p.name?.replace(/^projects\//, "") ?? "",
   name: p.name ?? `projects/${p.projectId}`,
@@ -128,6 +163,8 @@ const toAttributes = (p: crm.Project): Project["Attributes"] => ({
   parent: p.parent ?? "",
   createTime: p.createTime,
   labels: { ...(p.labels ?? {}) },
+  billingAccount: billingInfo?.billingAccountName || undefined,
+  billingEnabled: billingInfo?.billingEnabled ?? false,
 });
 
 export const ProjectProvider = () =>
@@ -141,6 +178,8 @@ export const ProjectProvider = () =>
       const patchProjects = yield* crm.patchProjects;
       const deleteProjects = yield* crm.deleteProjects;
       const getOperations = yield* crm.getOperations;
+      const getBillingInfo = yield* billing.getBillingInfoProjects;
+      const updateBillingInfo = yield* billing.updateBillingInfoProjects;
 
       const awaitOperation = Effect.fn(function* (
         operationName: string,
@@ -208,6 +247,41 @@ export const ProjectProvider = () =>
                 ),
           ),
         );
+
+      // Read current billing association. Returns `undefined` when the
+      // project is unknown to billing (NotFound) or invisible to the
+      // caller (Forbidden) — same 403→missing collapse as the project
+      // observe path.
+      const observeBilling = (projectId: string) =>
+        getBillingInfo({ name: `projects/${projectId}` }).pipe(
+          Effect.catchTag("NotFound", () =>
+            Effect.succeed(undefined as billing.ProjectBillingInfo | undefined),
+          ),
+          Effect.catchTag("Forbidden", () =>
+            Effect.succeed(undefined as billing.ProjectBillingInfo | undefined),
+          ),
+        );
+
+      // Attach / detach a billing account on the project. Pass empty
+      // string to detach (GCP's documented contract — see the long
+      // disclaimer on `updateBillingInfoProjects` warning that this
+      // disables paid services on the project). Synchronous PUT, no
+      // LRO involved.
+      const syncBilling = Effect.fn(function* (
+        projectId: string,
+        observed: billing.ProjectBillingInfo | undefined,
+        desired: string | undefined,
+      ) {
+        const observedAccount = observed?.billingAccountName ?? "";
+        const desiredAccount = desired ?? "";
+        if (observedAccount === desiredAccount) {
+          return observed;
+        }
+        return yield* updateBillingInfo({
+          name: `projects/${projectId}`,
+          body: { billingAccountName: desiredAccount },
+        });
+      });
 
       const syncMutable = Effect.fn(function* (
         observed: crm.Project,
@@ -308,7 +382,18 @@ export const ProjectProvider = () =>
             session,
           );
 
-          return toAttributes(synced);
+          // 4. Sync billing association. Done after the project patch
+          //    so the project resource is fully present before we
+          //    attach billing (CRM project create is the LRO; billing
+          //    update is synchronous).
+          const observedBilling = yield* observeBilling(synced.projectId!);
+          const finalBilling = yield* syncBilling(
+            synced.projectId!,
+            observedBilling,
+            news.billingAccount,
+          );
+
+          return toAttributes(synced, finalBilling);
         }),
         delete: Effect.fn(function* ({ output, session }) {
           yield* deleteProjects({ name: `projects/${output.projectId}` }).pipe(
@@ -339,7 +424,8 @@ export const ProjectProvider = () =>
             (yield* createProjectId(id, olds?.projectId));
           const observed = yield* observeProject(projectId);
           if (!observed) return undefined;
-          const attrs = toAttributes(observed);
+          const observedBilling = yield* observeBilling(projectId);
+          const attrs = toAttributes(observed, observedBilling);
           // Adoption gate: a project without our internal labels was
           // created outside this stack/stage/id. The engine surfaces
           // `Unowned(attrs)` to the user as "exists but is not ours" —

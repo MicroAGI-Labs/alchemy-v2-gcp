@@ -7,6 +7,11 @@ import * as Effect from "effect/Effect";
 // Folder under microagi org (id 622919272632) where research projects live.
 // Override via env to point at a different folder for local sandboxes.
 const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+// Billing account to attach to fresh test projects. Required because
+// container.googleapis.com refuses to enable on a project without
+// billing. No default — must be set explicitly to avoid charging an
+// arbitrary account; tests that need it are skipped otherwise.
+const BILLING_ACCOUNT = process.env.GCP_TEST_BILLING_ACCOUNT;
 
 // GCP project IDs are globally unique forever (soft-deletion holds the ID
 // for ~30 days after delete). Stamp a per-invocation suffix so reruns of
@@ -20,7 +25,9 @@ const TIMEOUT = { timeout: 30 * 60 * 1000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-test.provider(
+const runOrSkip = BILLING_ACCOUNT ? test.provider : test.provider.skip;
+
+runOrSkip(
   "create + update labels + delete a cluster",
   (stack) =>
     Effect.gen(function* () {
@@ -34,18 +41,27 @@ test.provider(
       // would be destroyed by the engine's diff.
       const buildGraph = (resourceLabels: Record<string, string>) =>
         Effect.gen(function* () {
+          // Attach billing inline on the project. Without it, the
+          // ApiEnable below would fail with "Billing account ... is
+          // not found. Billing must be enabled for activation of
+          // service(s) 'container.googleapis.com'".
           const project = yield* GCP.Project("ClusterTestProj", {
             projectId,
             parent: { type: "folder", id: FOLDER_ID },
+            billingAccount: BILLING_ACCOUNT,
           });
           // Container API must be enabled before any GKE call works on
-          // a freshly-created project.
-          yield* GCP.ApiEnable("ContainerApi", {
+          // a freshly-created project. Route the cluster's `project`
+          // through `containerApi.project` (rather than directly
+          // through `project.projectId`) so alchemy sees the
+          // dependency edge and sequences API enable before cluster
+          // create.
+          const containerApi = yield* GCP.ApiEnable("ContainerApi", {
             project: project.projectId,
             service: "container.googleapis.com",
           });
           const cluster = yield* GCP.Cluster("Test", {
-            project: project.projectId,
+            project: containerApi.project,
             location: "us-central1-a",
             releaseChannel: { channel: "REGULAR" },
             resourceLabels,

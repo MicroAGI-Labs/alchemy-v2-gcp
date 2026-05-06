@@ -47,6 +47,12 @@ export type ApiEnableAttributes = {
 
 /**
  * @section Enabling APIs
+ *
+ * **Dependency edges are explicit.** Alchemy sequences resources by the
+ * Output references they consume. To make a downstream resource (e.g.
+ * `GCP.Cluster`) wait for the API enable, route its `project` prop
+ * through `apiEnable.project` rather than `project.projectId`:
+ *
  * @example Container API for GKE
  * ```typescript
  * const project = yield* GCP.Project("Research", { ... });
@@ -55,20 +61,25 @@ export type ApiEnableAttributes = {
  *   service: "container.googleapis.com",
  * });
  * const cluster = yield* GCP.Cluster("Main", {
- *   project: project.projectId,
+ *   project: containerApi.project, // ← edge through ApiEnable, not Project
  *   location: "us-central1-a",
- *   // alchemy will resolve `containerApi` before the cluster reconciles
- *   // because the cluster depends on `project.projectId` and the user
- *   // wires the API as an explicit dependency by referencing it.
- *   ...
+ *   // ...
  * });
  * ```
  *
+ * If the cluster instead read `project.projectId`, alchemy would
+ * schedule the cluster create in parallel with the API enable and the
+ * GKE call would fail with `Forbidden: <X> API has not been used in
+ * project ... before or it is disabled.`
+ *
  * @example Multiple APIs on a project
  * ```typescript
- * yield* GCP.ApiEnable("ContainerApi", { project, service: "container.googleapis.com" });
- * yield* GCP.ApiEnable("ComputeApi", { project, service: "compute.googleapis.com" });
- * yield* GCP.ApiEnable("IamApi", { project, service: "iam.googleapis.com" });
+ * const containerApi = yield* GCP.ApiEnable("ContainerApi",
+ *   { project: project.projectId, service: "container.googleapis.com" });
+ * const computeApi = yield* GCP.ApiEnable("ComputeApi",
+ *   { project: project.projectId, service: "compute.googleapis.com" });
+ * // Then route downstream resources through the API enables that gate them:
+ * const cluster = yield* GCP.Cluster("Main", { project: containerApi.project, ... });
  * ```
  */
 export type ApiEnable = Resource<

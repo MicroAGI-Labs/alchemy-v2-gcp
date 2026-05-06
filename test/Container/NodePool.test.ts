@@ -5,6 +5,7 @@ import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 
 const FOLDER_ID = process.env.GCP_TEST_FOLDER_ID ?? "<redacted-folder-id>";
+const BILLING_ACCOUNT = process.env.GCP_TEST_BILLING_ACCOUNT;
 
 const runId = () => Math.random().toString(36).slice(2, 8);
 
@@ -14,7 +15,9 @@ const TIMEOUT = { timeout: 30 * 60 * 1000 };
 
 const { test } = Test.make({ providers: GCP.providers() });
 
-test.provider(
+const runOrSkip = BILLING_ACCOUNT ? test.provider : test.provider.skip;
+
+runOrSkip(
   "create + resize + delete a node pool",
   (stack) =>
     Effect.gen(function* () {
@@ -27,13 +30,17 @@ test.provider(
           const project = yield* GCP.Project("PoolTestProj", {
             projectId,
             parent: { type: "folder", id: FOLDER_ID },
+            billingAccount: BILLING_ACCOUNT,
           });
-          yield* GCP.ApiEnable("ContainerApi", {
+          // Routing the cluster's `project` through `containerApi.project`
+          // gives alchemy the dependency edge it needs to sequence
+          // API enablement before the cluster create.
+          const containerApi = yield* GCP.ApiEnable("ContainerApi", {
             project: project.projectId,
             service: "container.googleapis.com",
           });
           const cluster = yield* GCP.Cluster("PoolTestCluster", {
-            project: project.projectId,
+            project: containerApi.project,
             location: "us-central1-a",
             // Bootstrap pool is owned by the cluster. Distinct name from
             // the GCP.NodePool below so the two don't collide.

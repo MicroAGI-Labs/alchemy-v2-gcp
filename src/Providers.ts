@@ -3,8 +3,24 @@ import * as Layer from "effect/Layer";
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
+import { GlobalAddress, GlobalAddressProvider } from "./Compute/GlobalAddress.ts";
+import { Network, NetworkProvider } from "./Compute/Network.ts";
+import { SharedVpcHost, SharedVpcHostProvider } from "./Compute/SharedVpcHost.ts";
+import {
+  SharedVpcServiceProject,
+  SharedVpcServiceProjectProvider,
+} from "./Compute/SharedVpcServiceProject.ts";
+import { Subnetwork, SubnetworkProvider } from "./Compute/Subnetwork.ts";
 import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
 import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
+import {
+  ParallelstoreInstance,
+  ParallelstoreInstanceProvider,
+} from "./Parallelstore/Instance.ts";
+import {
+  PsaConnection,
+  PsaConnectionProvider,
+} from "./ServiceNetworking/PsaConnection.ts";
 import { ApiEnable, ApiEnableProvider } from "./ServiceUsage/ApiEnable.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("GCP") {}
@@ -29,7 +45,19 @@ export type ProviderRequirements = Layer.Services<ReturnType<typeof providers>>;
 export const providers = () =>
   Layer.effect(
     Providers,
-    Provider.collection([Project, Cluster, NodePool, ApiEnable]),
+    Provider.collection([
+      Project,
+      Cluster,
+      NodePool,
+      ApiEnable,
+      Network,
+      Subnetwork,
+      GlobalAddress,
+      SharedVpcHost,
+      SharedVpcServiceProject,
+      PsaConnection,
+      ParallelstoreInstance,
+    ]),
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -37,6 +65,13 @@ export const providers = () =>
         ClusterProvider(),
         NodePoolProvider(),
         ApiEnableProvider(),
+        NetworkProvider(),
+        SubnetworkProvider(),
+        GlobalAddressProvider(),
+        SharedVpcHostProvider(),
+        SharedVpcServiceProjectProvider(),
+        PsaConnectionProvider(),
+        ParallelstoreInstanceProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

@@ -310,7 +310,55 @@ export const ProjectProvider = () =>
         return yield* updateBillingInfo({
           name: `projects/${projectId}`,
           body: { billingAccountName: desiredAccount },
-        });
+        }).pipe(
+          // Surface the most common BadRequest mode — the billing
+          // account's per-account project-attach quota — with a
+          // remediation pointer. Soft-deleted projects continue to
+          // hold quota for 30 days, so the typical fix is a quota
+          // increase rather than waiting it out. Other 400s
+          // (malformed account name, closed account, permission
+          // mismatch) propagate untouched so the underlying API
+          // message is preserved.
+          // Surface the most common BadRequest mode with a clear
+          // remediation pointer, and re-shape every BadRequest into
+          // ConfigError so callers see one error class regardless of
+          // the underlying GCP-side detail. The two patterns:
+          //
+          //   1. Billing-account project-attach quota exhausted —
+          //      every soft-deleted project still holds quota for
+          //      30 days. Real fix is a quota increase request.
+          //   2. Other 400s (malformed account name, closed
+          //      account, IAM mismatch on `billing.resourceAssociations.create`)
+          //      — surface the underlying GCP message.
+          Effect.catchTag("BadRequest", (e) => {
+            // GCP returns the high-level message in `e.message` and
+            // stuffs the structured detail (e.g. `QuotaFailure`) into
+            // the response body's `details[]` array — which distilled
+            // doesn't surface (only `message` is parsed in
+            // `vendor/distilled/packages/gcp/src/client/api.ts:32-35`).
+            //
+            // The single most common 4xx on `updateBillingInfo` is
+            // FAILED_PRECONDITION ("Precondition check failed.") for
+            // the billing account's per-account project-attach quota.
+            // Each successful attach — including soft-deleted projects
+            // within their 30-day retention window — counts toward
+            // this quota. There is no way to detect this case with
+            // certainty from the surfaced error, so we always include
+            // the quota-remediation hint alongside the underlying
+            // message; users who hit a different 400 will still see
+            // GCP's real reason in the prefix.
+            const underlying = e.message ?? "unknown 400 from cloudbilling.updateBillingInfo";
+            const isLikelyQuota = /precondition|FAILED_PRECONDITION/i.test(underlying);
+            const hint = isLikelyQuota
+              ? " This is most often the billing account's project-attach quota — request an increase at https://support.google.com/code/contact/billing_quota_increase, or use a different billing account."
+              : "";
+            return Effect.fail(
+              new ConfigError({
+                message: `Cannot attach billing account ${desiredAccount} to project ${projectId}: ${underlying}.${hint}`,
+              }),
+            );
+          }),
+        );
       });
 
       const syncMutable = Effect.fn(function* (

@@ -27,8 +27,6 @@ A `serviceAccountKey` flow is also wired through `alchemy login`.
 
 ## Use
 
-Alchemy stacks are TypeScript files that `export default` an `Alchemy.Stack`. The `alchemy` CLI consumes that default export — there is no programmatic `run` wrapper.
-
 `alchemy.run.ts`:
 
 ```ts

@@ -39,9 +39,9 @@ await Alchemy.run(
     { providers: GCP.providers(), state: inMemoryState() },
     Effect.gen(function* () {
       const project = yield* GCP.Project("ResearchProj", {
-        parent: { type: "folder", id: "<redacted-folder-id>" },
+        parent: { type: "folder", id: "<your-folder-id>" },
         displayName: "research",
-        billingAccount: "billingAccounts/<redacted-billing>",
+        billingAccount: "billingAccounts/<your-billing-account>",
       });
 
       const cluster = yield* GCP.Cluster("Main", {

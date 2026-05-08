@@ -14,9 +14,9 @@ import { Subnetwork, SubnetworkProvider } from "./Compute/Subnetwork.ts";
 import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
 import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
 import {
-  ParallelstoreInstance,
-  ParallelstoreInstanceProvider,
-} from "./Parallelstore/Instance.ts";
+  ManagedLustreInstance,
+  ManagedLustreInstanceProvider,
+} from "./ManagedLustre/Instance.ts";
 import {
   PsaConnection,
   PsaConnectionProvider,
@@ -56,7 +56,7 @@ export const providers = () =>
       SharedVpcHost,
       SharedVpcServiceProject,
       PsaConnection,
-      ParallelstoreInstance,
+      ManagedLustreInstance,
     ]),
   ).pipe(
     Layer.provide(
@@ -71,7 +71,7 @@ export const providers = () =>
         SharedVpcHostProvider(),
         SharedVpcServiceProjectProvider(),
         PsaConnectionProvider(),
-        ParallelstoreInstanceProvider(),
+        ManagedLustreInstanceProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

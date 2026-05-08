@@ -21,6 +21,23 @@ export type ProjectParent =
   | { type: "folder"; id: string }
   | { type: "organization"; id: string };
 
+/**
+ * Single (role, members) entry on a Project's IAM policy. Targets
+ * declare this contract so capabilities can `.bind` IAM grants onto
+ * the project — the provider's `reconcile` merges all bound entries
+ * by role into a single `setIamPolicy` call.
+ */
+export type ProjectIamBinding = {
+  /** IAM role, e.g. `"roles/container.hostServiceAgentUser"`. */
+  role: string;
+  /** Principals, e.g. `["serviceAccount:foo@bar.iam.gserviceaccount.com"]`. */
+  members: ReadonlyArray<string>;
+};
+
+export type ProjectBindingContract = {
+  iamBindings: ReadonlyArray<ProjectIamBinding>;
+};
+
 export type ProjectProps = {
   /**
    * Globally-unique project ID. 6-30 lowercase letters/digits/hyphens,
@@ -153,7 +170,7 @@ export type Project = Resource<
      */
     billingEnabled: boolean;
   },
-  never,
+  ProjectBindingContract,
   GCP.Providers
 >;
 
@@ -208,6 +225,8 @@ export const ProjectProvider = () =>
       const patchProjects = yield* crm.patchProjects;
       const deleteProjects = yield* crm.deleteProjects;
       const getOperations = yield* crm.getOperations;
+      const getIamPolicy = yield* crm.getIamPolicyProjects;
+      const setIamPolicy = yield* crm.setIamPolicyProjects;
       const getBillingInfo = yield* billing.getBillingInfoProjects;
       const updateBillingInfo = yield* billing.updateBillingInfoProjects;
 
@@ -393,6 +412,67 @@ export const ProjectProvider = () =>
         );
       });
 
+      // Apply merged IAM bindings as a single setIamPolicy. Bindings
+      // are unioned per role (multiple `.bind` callers sharing a role
+      // get their members combined). Foreign bindings on the policy
+      // (non-alchemy roles, or members we don't manage on the same
+      // role) are preserved verbatim. Etag round-trip handles
+      // concurrent edits; Conflict triggers a re-read + retry.
+      const syncIam = (args: {
+        projectId: string;
+        bindings: ReadonlyArray<
+          import("alchemy/Resource").ResourceBinding<ProjectBindingContract>
+        >;
+      }) =>
+        Effect.gen(function* () {
+          const desiredByRole = new Map<string, Set<string>>();
+          for (const b of args.bindings) {
+            for (const ib of b.data.iamBindings) {
+              const set = desiredByRole.get(ib.role) ?? new Set<string>();
+              for (const m of ib.members) set.add(m);
+              desiredByRole.set(ib.role, set);
+            }
+          }
+          if (desiredByRole.size === 0) return;
+
+          const current = yield* getIamPolicy({
+            resource: `projects/${args.projectId}`,
+            body: { options: { requestedPolicyVersion: 3 } },
+          });
+
+          const existingBindings = (current.bindings ?? []).map((b) => ({
+            ...b,
+            members: [...(b.members ?? [])],
+          }));
+          let mutated = false;
+          for (const [role, members] of desiredByRole) {
+            let existing = existingBindings.find(
+              (b) => b.role === role && !b.condition,
+            );
+            if (!existing) {
+              existing = { role, members: [] };
+              existingBindings.push(existing);
+            }
+            const merged = new Set([...(existing.members ?? []), ...members]);
+            if (merged.size !== (existing.members?.length ?? 0)) mutated = true;
+            existing.members = [...merged];
+          }
+          if (!mutated) return;
+
+          yield* setIamPolicy({
+            resource: `projects/${args.projectId}`,
+            body: {
+              policy: { ...current, bindings: existingBindings, version: 3 },
+            },
+          });
+        }).pipe(
+          Effect.retry({
+            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
+              Schedule.both(Schedule.recurs(8)),
+            ),
+          }),
+        );
+
       return {
         stables: ["projectId", "projectNumber", "name"],
         diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
@@ -410,7 +490,7 @@ export const ProjectProvider = () =>
             return { action: "replace" } as const;
           }
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, news, session, bindings }) {
           const projectId = yield* createProjectId(id, news.projectId);
           const parent = parentToString(news.parent);
           const internalLabels = yield* gcpInternalLabels(id);
@@ -470,6 +550,14 @@ export const ProjectProvider = () =>
             observedBilling,
             news.billingAccount,
           );
+
+          // 5. Sync IAM bindings (host-side IAM grants etc). Single
+          //    setIamPolicy with merged bindings; foreign roles
+          //    preserved. Etag-retried internally.
+          yield* syncIam({
+            projectId: synced.projectId!,
+            bindings,
+          });
 
           return toAttributes(synced, finalBilling);
         }),

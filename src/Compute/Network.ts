@@ -15,6 +15,15 @@ import {
 import type * as GCP from "../Providers.ts";
 import { makeAwaitGlobalOperation } from "./Operations.ts";
 
+// Distinct nominal brands keep `NetworkRef` and `NetworkRefById`
+// mutually unassignable even though their underlying template-literal
+// shapes overlap. The brand symbols are `declare`-only — never present
+// at runtime — and only the constructor functions below mint values
+// carrying them, so a caller cannot bypass the type by hand-crafting a
+// raw string and asserting it.
+declare const _networkRefByNumberBrand: unique symbol;
+declare const _networkRefByIdBrand: unique symbol;
+
 /**
  * Fully-qualified VPC reference in **project-number** form:
  * `projects/{projectNumber}/global/networks/{name}`.
@@ -33,9 +42,32 @@ import { makeAwaitGlobalOperation } from "./Operations.ts";
  *
  * `Project.projectNumber` is typed as `` `${number}` `` precisely so
  * this template literal type composes without a runtime coercion at
- * the call site.
+ * the call site. The nominal brand prevents a `NetworkRefById` from
+ * being passed where this is expected and vice versa — see
+ * {@link NetworkRefById}.
  */
-export type NetworkRef = `projects/${number}/global/networks/${string}`;
+export type NetworkRef = `projects/${number}/global/networks/${string}` & {
+  readonly [_networkRefByNumberBrand]: true;
+};
+
+/**
+ * Fully-qualified VPC reference in **project-ID** form:
+ * `projects/{projectId}/global/networks/{name}`.
+ *
+ * Required by Managed Lustre's `instances.create` (and any future GCP
+ * API that explicitly rejects the project-number form). Build with
+ * {@link networkRefById}.
+ *
+ * Note: project-ID form is in some places interchangeable with
+ * project-number form (the SDK accepts either for compute / GKE), but
+ * Managed Lustre's API validates the path segment shape and refuses
+ * numeric ids — without this distinct branded type, a stack would
+ * compile fine and only fail at deploy time with `BadRequest: Valid
+ * format: projects/{project_id}/global/networks/{network_id}`.
+ */
+export type NetworkRefById = `projects/${string}/global/networks/${string}` & {
+  readonly [_networkRefByIdBrand]: true;
+};
 
 /**
  * Build a project-number-form `NetworkRef`. Lifted through `Output`
@@ -58,10 +90,31 @@ export const networkRef = (
     Output.asOutput(networkName),
   ).pipe(
     Output.map(
-      ([num, name]) =>
-        `projects/${num}/global/networks/${name}` as NetworkRef,
+      ([num, name]) => `projects/${num}/global/networks/${name}`,
     ),
-  );
+  ) as unknown as Output.Output<NetworkRef>;
+
+/**
+ * Build a project-ID-form `NetworkRefById`. Use for APIs that require
+ * the project-ID path segment — Managed Lustre is the current example.
+ *
+ * Pass `Project.projectId` (an `Output<string>`) plus `Network.name`.
+ * Plain literal arguments work too: `networkRefById("research-shared",
+ * "main")`. The branded return type prevents the value from being
+ * confused with a project-number-form {@link NetworkRef} at any call
+ * site downstream — even though their string shapes happen to coincide
+ * for numeric ids.
+ */
+export const networkRefById = (
+  projectId: string | Output.Output<string>,
+  networkName: string | Output.Output<string>,
+): Output.Output<NetworkRefById> =>
+  Output.all(
+    Output.asOutput(projectId),
+    Output.asOutput(networkName),
+  ).pipe(
+    Output.map(([id, name]) => `projects/${id}/global/networks/${name}`),
+  ) as unknown as Output.Output<NetworkRefById>;
 
 /**
  * A VPC Network in custom-mode (`autoCreateSubnetworks=false`). Auto-mode

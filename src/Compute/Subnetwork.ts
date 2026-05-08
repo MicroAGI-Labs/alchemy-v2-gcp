@@ -5,7 +5,10 @@ import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { deepEqual, isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
+import type { ResourceBinding } from "alchemy/Resource";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import {
   descriptionHasAlchemyMarker,
   gcpAlchemyDescription,
@@ -118,11 +121,28 @@ export type SubnetworkAttributes = {
   gatewayAddress: string | undefined;
 };
 
+/**
+ * Single (role, members) entry on a Subnetwork's IAM policy. Targets
+ * declare this contract so capabilities can `.bind` IAM grants onto
+ * the subnet — the provider's `reconcile` merges all bound entries
+ * by role into a single `setIamPolicy` call.
+ */
+export type SubnetworkIamBinding = {
+  /** IAM role, e.g. `"roles/compute.networkUser"`. */
+  role: string;
+  /** Principals, e.g. `["serviceAccount:foo@bar.iam.gserviceaccount.com"]`. */
+  members: ReadonlyArray<string>;
+};
+
+export type SubnetworkBindingContract = {
+  iamBindings: ReadonlyArray<SubnetworkIamBinding>;
+};
+
 export type Subnetwork = Resource<
   "GCP.Subnetwork",
   SubnetworkProps,
   SubnetworkAttributes,
-  never,
+  SubnetworkBindingContract,
   GCP.Providers
 >;
 export const Subnetwork = Resource<Subnetwork>("GCP.Subnetwork");
@@ -164,7 +184,81 @@ export const SubnetworkProvider = () =>
       const deleteSubnetworks = yield* compute.deleteSubnetworks;
       const expandIpCidrRange = yield* compute.expandIpCidrRangeSubnetworks;
       const getRegionOperations = yield* compute.getRegionOperations;
+      const getIamPolicy = yield* compute.getIamPolicySubnetworks;
+      const setIamPolicy = yield* compute.setIamPolicySubnetworks;
       const awaitOp = makeAwaitRegionOperation(getRegionOperations);
+
+      // Apply merged IAM bindings as a single setIamPolicy. Bindings
+      // are unioned per role (multiple `.bind` callers sharing a role
+      // get their members combined). Foreign bindings on the policy
+      // (non-alchemy roles, or members we don't manage in this role)
+      // are preserved verbatim. Etag round-trip handles concurrent
+      // edits; Conflict triggers a re-read + retry.
+      const syncIam = (args: {
+        project: string;
+        region: string;
+        name: string;
+        bindings: ReadonlyArray<ResourceBinding<SubnetworkBindingContract>>;
+      }) =>
+        Effect.gen(function* () {
+          // Union all incoming binds by role.
+          const desiredByRole = new Map<string, Set<string>>();
+          for (const b of args.bindings) {
+            for (const ib of b.data.iamBindings) {
+              const set = desiredByRole.get(ib.role) ?? new Set<string>();
+              for (const m of ib.members) set.add(m);
+              desiredByRole.set(ib.role, set);
+            }
+          }
+          if (desiredByRole.size === 0) return;
+
+          const current = yield* getIamPolicy({
+            project: args.project,
+            region: args.region,
+            resource: args.name,
+            optionsRequestedPolicyVersion: 3,
+          });
+
+          // Take the current policy verbatim, then for each role we
+          // manage, union desired members into the existing binding (or
+          // create one). This preserves foreign roles and any extra
+          // members on the same role that we don't know about.
+          const bindings = (current.bindings ?? []).map((b) => ({
+            ...b,
+            members: [...(b.members ?? [])],
+          }));
+          let mutated = false;
+          for (const [role, members] of desiredByRole) {
+            let existing = bindings.find(
+              (b) => b.role === role && !b.condition,
+            );
+            if (!existing) {
+              existing = { role, members: [] };
+              bindings.push(existing);
+            }
+            const merged = new Set([...(existing.members ?? []), ...members]);
+            if (merged.size !== (existing.members?.length ?? 0)) mutated = true;
+            existing.members = [...merged];
+          }
+          if (!mutated) return;
+
+          yield* setIamPolicy({
+            project: args.project,
+            region: args.region,
+            resource: args.name,
+            body: { policy: { ...current, bindings, version: 3 } },
+          });
+        }).pipe(
+          // setIamPolicy returns Conflict on etag race. Re-read + retry.
+          // With multiple subnets/projects in a stack each receiving
+          // multiple bindings in parallel, races are common. Cap at
+          // ~1.5 min total to surface real failures.
+          Effect.retry({
+            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
+              Schedule.both(Schedule.recurs(8)),
+            ),
+          }),
+        );
 
       const observe = (project: string, region: string, name: string) =>
         getSubnetworks({ project, region, subnetwork: name }).pipe(
@@ -265,7 +359,7 @@ export const SubnetworkProvider = () =>
           }
           return undefined;
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, news, session, bindings }) {
           const desiredName =
             news.name ??
             (yield* createPhysicalName({ id, maxLength: 63 })).toLowerCase();
@@ -329,6 +423,15 @@ export const SubnetworkProvider = () =>
             observed,
             desired: news.ipCidrRange,
             session,
+          });
+
+          // Apply IAM bindings AFTER the subnet exists. Single
+          // setIamPolicy call covers all bindings for this subnet.
+          yield* syncIam({
+            project: news.project,
+            region: news.region,
+            name: desiredName,
+            bindings,
           });
 
           const final = yield* getSubnetworks({

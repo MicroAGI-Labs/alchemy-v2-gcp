@@ -3,3 +3,4 @@ export * from "./Network.ts";
 export * from "./SharedVpcHost.ts";
 export * from "./SharedVpcServiceProject.ts";
 export * from "./Subnetwork.ts";
+export * from "./SubnetworkIamMember.ts";

@@ -76,7 +76,12 @@ export const SharedVpcServiceProjectProvider = () =>
       // empty fields instead, so we coalesce both.
       const observeHost = (serviceProject: string) =>
         getXpnHostProjects({ project: serviceProject }).pipe(
-          Effect.map((p) => p.name ?? p.id ?? undefined),
+          // Three "not attached" shapes observed:
+          //   - 404 NotFound (catchTag below)
+          //   - 200 with a `Project` whose name/id are empty
+          //   - 200 with an undefined body (no Project payload at all)
+          // Coalesce all three to `undefined`.
+          Effect.map((p) => p?.name ?? p?.id ?? undefined),
           Effect.catchTag("NotFound", () =>
             Effect.succeed(undefined as string | undefined),
           ),

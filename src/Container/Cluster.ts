@@ -88,6 +88,31 @@ export type ClusterProps = {
     networkPolicyConfig?: { disabled?: boolean };
     gcePersistentDiskCsiDriverConfig?: { enabled?: boolean };
     gcsFuseCsiDriverConfig?: { enabled?: boolean };
+    /**
+     * Managed Lustre CSI driver (mount `GCP.ManagedLustreInstance`
+     * volumes as ReadWriteMany PVCs from pods). Driver is installed
+     * cluster-wide once enabled; the StorageClass + PV bindings are
+     * still authored by the consumer.
+     */
+    lustreCsiDriverConfig?: {
+      enabled?: boolean;
+      /**
+       * Workaround for a port conflict between the Lustre CSI driver
+       * and `gke-metadata-server`. Required ONLY when the cluster's
+       * GKE node version is older than `1.33.2-gke.4655000` AND you
+       * are mounting a `ManagedLustreInstance` with
+       * `gkeSupportEnabled: true`. Deprecated otherwise — leave
+       * unset on modern node versions.
+       */
+      enableLegacyLustrePort?: boolean;
+      /**
+       * Disable the driver's multi-NIC auto-configuration. By
+       * default it discovers and binds every suitable NIC on each
+       * node for maximum I/O throughput. Set true only if multi-NIC
+       * causes a problem in your network topology.
+       */
+      disableMultiNic?: boolean;
+    };
     gkeBackupAgentConfig?: { enabled?: boolean };
     dnsCacheConfig?: { enabled?: boolean };
     configConnectorConfig?: { enabled?: boolean };

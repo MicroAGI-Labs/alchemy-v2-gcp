@@ -72,7 +72,12 @@ runOrSkip(
         }),
       );
 
-      expect(result.psa.network).toBe(
+      // Cast through `string` — `toBe` is exact-equality and the
+      // assertion target is a plain interpolation; the runtime value
+      // matches but its declared type (the branded `NetworkRef`)
+      // wouldn't accept a non-branded string. The runtime comparison
+      // is what we care about.
+      expect(result.psa.network as string).toBe(
         `projects/${result.project.projectNumber}/global/networks/${result.network.name}`,
       );
       expect(result.psa.serviceName).toBe(

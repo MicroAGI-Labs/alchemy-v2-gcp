@@ -11,7 +11,15 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type * as GCP from "../Providers.ts";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { makeSyncIam, type RunIamBindingContract } from "./IamSync.ts";
 import { makeAwaitOperation } from "./Operations.ts";
+import {
+  reshapeBadRequest,
+  validateAnnotations,
+  validateContainers,
+  validateLabels,
+  validateRunName,
+} from "./Validation.ts";
 
 /**
  * A Cloud Run v2 Service — a managed serverless HTTP endpoint. Cloud
@@ -29,19 +37,28 @@ import { makeAwaitOperation } from "./Operations.ts";
  *
  * **Lifecycle.** observe → ensure (create, retrying on the well-known
  * "API not yet enabled" 403) → sync (patch with updateMask of changed
- * top-level fields) → return.
+ * top-level fields) → sync IAM bindings → return.
  *
  * **Replace triggers.** Only identity fields (project, location, name)
  * force replacement. Everything else — image, env, scaling, traffic,
  * ingress, IAM — is in-place via `patch`. New revisions are auto-created
  * by Cloud Run on any `template.*` change.
  *
+ * **Optimistic concurrency.** Patch and delete pass through the
+ * observed `etag` so concurrent edits (e.g. from `gcloud run services
+ * update`) surface as `Conflict` instead of silently overwriting.
+ *
  * **Adoption.** Label-gated: a Service whose `labels` lack our
  * `alchemy_*` keys is wrapped in `Unowned(attrs)` from `read`, forcing
  * `--adopt` before takeover.
  *
+ * **IAM.** Use {@link import("./IamMember.ts").serviceIamMember} to
+ * bind `(role, member)` grants — the provider unions all bindings and
+ * applies them via a single `setIamPolicy` round-trip, preserving
+ * foreign roles + members.
+ *
  * @section Creating a Cloud Run Service
- * @example Minimal "hello" service
+ * @example Minimal "hello" service, public via IAM
  * ```typescript
  * const helloApi = yield* GCP.Service("HelloApi", {
  *   project: project.projectId,
@@ -49,6 +66,10 @@ import { makeAwaitOperation } from "./Operations.ts";
  *   template: {
  *     containers: [{ image: "gcr.io/cloudrun/hello" }],
  *   },
+ * });
+ * yield* GCP.serviceIamMember(helloApi, "PublicInvoker", {
+ *   role: "roles/run.invoker",
+ *   member: "allUsers",
  * });
  * // helloApi.uri → https://hello-api-XXXXX-ew.a.run.app
  * ```
@@ -124,7 +145,9 @@ export type ServiceProps = {
   /**
    * Disable the IAM permission check for invokers. When `true`, the
    * Service is publicly reachable regardless of IAM policy — a
-   * deliberate footgun, surface it consciously. Mutable via `patch`.
+   * deliberate footgun, surface it consciously. Prefer
+   * `serviceIamMember(svc, "Public", { role: "roles/run.invoker", member: "allUsers" })`
+   * for declarative public access. Mutable via `patch`.
    */
   invokerIamDisabled?: boolean;
   /**
@@ -198,7 +221,7 @@ export type Service = Resource<
   "GCP.Service",
   ServiceProps,
   ServiceAttributes,
-  never,
+  RunIamBindingContract,
   GCP.Providers
 >;
 export const Service = Resource<Service>("GCP.Service");
@@ -262,7 +285,10 @@ export const ServiceProvider = () =>
       const patchService = yield* run.patchProjectsLocationsServices;
       const deleteService = yield* run.deleteProjectsLocationsServices;
       const getOperation = yield* run.getProjectsLocationsOperations;
+      const getIamPolicy = yield* run.getIamPolicyProjectsLocationsServices;
+      const setIamPolicy = yield* run.setIamPolicyProjectsLocationsServices;
       const awaitOperation = makeAwaitOperation(getOperation);
+      const syncIam = makeSyncIam({ getIamPolicy, setIamPolicy });
 
       const observe = (project: string, location: string, name: string) =>
         getService({ name: fqName(project, location, name) }).pipe(
@@ -354,11 +380,21 @@ export const ServiceProvider = () =>
 
         if (updateMaskFields.length === 0) return;
 
+        // Pass the observed etag through the body so a concurrent edit
+        // racing us surfaces as Conflict instead of silently
+        // overwriting. Cloud Run reads etag from the body (it's a
+        // field on GoogleCloudRunV2Service, not a request-level param).
+        const bodyWithEtag: run.GoogleCloudRunV2Service = {
+          ...desiredBody,
+          ...(args.observed.etag ? { etag: args.observed.etag } : {}),
+        };
         const op = yield* patchService({
           name: args.name,
           updateMask: updateMaskFields.join(","),
-          body: desiredBody,
-        });
+          body: bodyWithEtag,
+        }).pipe(
+          Effect.catchTag("BadRequest", reshapeBadRequest("Service", "patch")),
+        );
         if (op.name) yield* awaitOperation(op.name, args.session);
       });
 
@@ -377,12 +413,22 @@ export const ServiceProvider = () =>
           }
           return undefined;
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, news, session, bindings }) {
           const internalLabels = yield* gcpInternalLabels(id);
           // Cloud Run service IDs must be <50 chars (server hard cap).
           const desiredName =
             news.name ??
             (yield* createPhysicalName({ id, maxLength: 49 })).toLowerCase();
+
+          // Plan-time validation: surface common footguns as typed
+          // ConfigErrors before any state mutation. The server would
+          // reject these too, but a 30 s wait + half-built state is a
+          // worse experience than failing immediately.
+          yield* validateRunName("Service", desiredName);
+          yield* validateLabels(news.labels);
+          yield* validateAnnotations(news.annotations);
+          yield* validateContainers("Service", news.template.containers);
+
           const parent = `projects/${news.project}/locations/${news.location}`;
           const name = fqName(news.project, news.location, desiredName);
           const desiredLabels: Record<string, string> = {
@@ -426,6 +472,10 @@ export const ServiceProvider = () =>
                   undefined as run.GoogleLongrunningOperation | undefined,
                 ),
               ),
+              Effect.catchTag(
+                "BadRequest",
+                reshapeBadRequest("Service", "create"),
+              ),
             );
             if (op?.name) yield* awaitOperation(op.name, session);
             observed = yield* getService({ name });
@@ -442,6 +492,12 @@ export const ServiceProvider = () =>
             session,
           });
 
+          // 4. Apply IAM bindings AFTER the service exists. Single
+          //    setIamPolicy call covers all bindings for this service;
+          //    foreign bindings are preserved verbatim. Etag round-trip
+          //    handles concurrent edits.
+          yield* syncIam({ resource: name, bindings });
+
           const final = yield* getService({ name });
           return toAttributes(final, {
             project: news.project,
@@ -451,7 +507,14 @@ export const ServiceProvider = () =>
         }),
         delete: Effect.fn(function* ({ output, session }) {
           const name = fqName(output.project, output.location, output.name);
-          yield* deleteService({ name }).pipe(
+          // Pass the etag we stored at last reconcile so a concurrent
+          // edit racing this delete surfaces as Conflict. If we never
+          // captured one (legacy state, adoption path), omit the
+          // parameter — Cloud Run treats it as "don't check".
+          yield* deleteService({
+            name,
+            ...(output.etag ? { etag: output.etag } : {}),
+          }).pipe(
             Effect.flatMap((op) =>
               op.name ? awaitOperation(op.name, session) : Effect.succeed(op),
             ),

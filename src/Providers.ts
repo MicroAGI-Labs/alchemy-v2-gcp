@@ -17,6 +17,7 @@ import {
   ManagedLustreInstance,
   ManagedLustreInstanceProvider,
 } from "./ManagedLustre/Instance.ts";
+import { Job, JobProvider } from "./Run/Job.ts";
 import { Service, ServiceProvider } from "./Run/Service.ts";
 import {
   PsaConnection,
@@ -59,6 +60,7 @@ export const providers = () =>
       PsaConnection,
       ManagedLustreInstance,
       Service,
+      Job,
     ]),
   ).pipe(
     Layer.provide(
@@ -75,6 +77,7 @@ export const providers = () =>
         PsaConnectionProvider(),
         ManagedLustreInstanceProvider(),
         ServiceProvider(),
+        JobProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

@@ -79,26 +79,78 @@ bun alchemy destroy ./alchemy.run.ts
 
 `Alchemy.localState()` writes Alchemy's resource state to `.alchemy/` next to the stack file. `Alchemy.inMemoryState()` is fine for tests but loses state between runs. For team use, swap in `httpStateStore()`.
 
-Long-running operations (`createProjects`, `patchProjects`, GKE cluster ops) are polled internally; reconcilers follow the [Alchemy reconciler doctrine](https://v2.alchemy.run/concepts/resource-lifecycle) (single observe → ensure → sync → return flow that converges from any starting state, including adoption).
+Long-running operations (`createProjects`, `patchProjects`, GKE cluster ops, Cloud Run service deploys) are polled internally; reconcilers follow the [Alchemy reconciler doctrine](https://v2.alchemy.run/concepts/resource-lifecycle) (single observe → ensure → sync → return flow that converges from any starting state, including adoption).
 
 ## Resources
 
+### Foundation
 - **`GCP.Project`** — projects under an org or folder, with optional billing-account attach.
 - **`GCP.ApiEnable`** — project-level GCP service enablement.
+
+### Compute
 - **`GCP.Cluster`** — Standard GKE cluster.
 - **`GCP.NodePool`** — node pool attached to a cluster, including accelerator (GPU) configurations.
+
+### Networking
 - **`GCP.Network`** — VPC network.
 - **`GCP.Subnetwork`** — VPC subnetwork.
 - **`GCP.PsaConnection`** — Private Service Access peering for Google managed services.
 - **`GCP.GlobalAddress`** — global IP address (typically used to reserve a PSA range).
 - **`GCP.SharedVpcHost`** / **`GCP.SharedVpcServiceProject`** — Shared VPC enable/attach.
-- **`GCP.ParallelstoreInstance`** — Parallelstore filesystem instance.
+
+### Serverless (Cloud Run v2)
+- **`GCP.Service`** — Cloud Run HTTP service with traffic routing, ingress controls, and IAM.
+- **`GCP.Job`** — Cloud Run batch workload (declarative definition; trigger execution imperatively via `runProjectsLocationsJobs`).
+- **`GCP.serviceIamMember`** / **`GCP.jobIamMember`** — bind `(role, member)` IAM grants on Cloud Run resources. Provider unions all bindings and writes one `setIamPolicy` per target, preserving foreign roles.
+
+### Storage
+- **`GCP.ManagedLustreInstance`** — Managed Lustre filesystem instance.
 
 Each resource's full prop/attribute set is documented as JSDoc on the source.
+
+### Cloud Run example
+
+```ts
+const api = yield* GCP.Service("HelloApi", {
+  project: project.projectId,
+  location: "europe-west4",
+  template: {
+    containers: [{ image: "gcr.io/cloudrun/hello" }],
+  },
+});
+
+// Declarative public access — preferred over `invokerIamDisabled: true`,
+// which bypasses IAM entirely and leaves no audit trail.
+yield* GCP.serviceIamMember(api, "PublicInvoker", {
+  role: "roles/run.invoker",
+  member: "allUsers",
+});
+
+// Batch workload — definition only; execution is imperative.
+const batch = yield* GCP.Job("ProcessBatch", {
+  project: project.projectId,
+  location: "europe-west4",
+  template: {
+    taskCount: 1,
+    template: {
+      maxRetries: 3,
+      containers: [{ image: "europe-west4-docker.pkg.dev/proj/repo/worker:v1" }],
+    },
+  },
+});
+```
+
+Clean type aliases are re-exported from the top level so consumers don't need to import from `@distilled.cloud/gcp` directly: `GCP.RevisionTemplate`, `GCP.Container`, `GCP.TrafficTarget`, `GCP.VpcAccess`, `GCP.NodeSelector`, etc.
 
 ## Adoption
 
 `read` is gated on the alchemy internal labels `alchemy_app` / `alchemy_stage` / `alchemy_id`. Existing GCP resources lacking those labels are returned `Unowned` — the engine refuses to take them over without explicit `--adopt` (or `adopt(true)` on the resource call).
+
+For resources that don't carry labels (Network, Subnetwork), the same `(app, stage, id)` triple is encoded as a sentinel inside `description` and matched on `read`.
+
+## Optimistic concurrency
+
+Resources with server-side fingerprints (Cloud Run Service/Job, Subnetwork) pass the observed `etag`/`fingerprint` through patch and delete calls. A concurrent edit between observe and patch surfaces as `Conflict` rather than silently overwriting.
 
 ## License
 

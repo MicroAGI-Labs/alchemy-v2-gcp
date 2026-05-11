@@ -57,7 +57,7 @@ runOrSkip(
   TIMEOUT,
 );
 
-test.provider(
+runOrSkip(
   "create, update displayName, delete",
   (stack) =>
     Effect.gen(function* () {

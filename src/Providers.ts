@@ -17,6 +17,7 @@ import {
   ManagedLustreInstance,
   ManagedLustreInstanceProvider,
 } from "./ManagedLustre/Instance.ts";
+import { Service, ServiceProvider } from "./Run/Service.ts";
 import {
   PsaConnection,
   PsaConnectionProvider,
@@ -57,6 +58,7 @@ export const providers = () =>
       SharedVpcServiceProject,
       PsaConnection,
       ManagedLustreInstance,
+      Service,
     ]),
   ).pipe(
     Layer.provide(
@@ -72,6 +74,7 @@ export const providers = () =>
         SharedVpcServiceProjectProvider(),
         PsaConnectionProvider(),
         ManagedLustreInstanceProvider(),
+        ServiceProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

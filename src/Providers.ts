@@ -1,5 +1,9 @@
 import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
+import {
+  ArtifactRegistryRepository,
+  ArtifactRegistryRepositoryProvider,
+} from "./ArtifactRegistry/Repository.ts";
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
@@ -24,6 +28,9 @@ import {
   PsaConnectionProvider,
 } from "./ServiceNetworking/PsaConnection.ts";
 import { ApiEnable, ApiEnableProvider } from "./ServiceUsage/ApiEnable.ts";
+import { SqlDatabase, SqlDatabaseProvider } from "./Sqladmin/Database.ts";
+import { SqlInstance, SqlInstanceProvider } from "./Sqladmin/Instance.ts";
+import { SqlUser, SqlUserProvider } from "./Sqladmin/User.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("GCP") {}
 
@@ -61,6 +68,10 @@ export const providers = () =>
       ManagedLustreInstance,
       Service,
       Job,
+      SqlInstance,
+      SqlDatabase,
+      SqlUser,
+      ArtifactRegistryRepository,
     ]),
   ).pipe(
     Layer.provide(
@@ -78,6 +89,10 @@ export const providers = () =>
         ManagedLustreInstanceProvider(),
         ServiceProvider(),
         JobProvider(),
+        SqlInstanceProvider(),
+        SqlDatabaseProvider(),
+        SqlUserProvider(),
+        ArtifactRegistryRepositoryProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

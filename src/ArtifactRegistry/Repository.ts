@@ -503,19 +503,23 @@ export const ArtifactRegistryRepositoryProvider = () =>
         ],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
+          // String-typed stables are reference-comparable.
           if (
             somePropsAreDifferent(
               olds as ArtifactRegistryRepositoryProps,
               news,
-              [
-                "project",
-                "location",
-                "name",
-                "format",
-                "mode",
-                "kmsKeyName",
-                "remoteRepositoryConfig",
-              ],
+              ["project", "location", "name", "format", "mode", "kmsKeyName"],
+            )
+          ) {
+            return { action: "replace" } as const;
+          }
+          // Object-typed stables must use deep equality — JSON-deserialized
+          // state never `===` a freshly-built literal even when content matches.
+          const oldsTyped = olds as ArtifactRegistryRepositoryProps;
+          if (
+            !deepEqual(
+              oldsTyped.remoteRepositoryConfig,
+              news.remoteRepositoryConfig,
             )
           ) {
             return { action: "replace" } as const;

@@ -4,6 +4,30 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — 2026-06-08
+
+### Fixed
+
+- **`Auth/Credentials.fromAuthProvider`** — adapt to upstream alchemy's
+  `Profile` service refactor. `loadOrConfigure` is no longer a top-level
+  export of `alchemy/Auth/Profile`; it's a method on the `Profile`
+  `Context.Service`. The Layer now yields `Profile` and calls
+  `profile.loadOrConfigure(...)`, mirroring the
+  `Cloudflare/Credentials.ts` shape in alchemy upstream. Required for
+  any alchemy version newer than the one this package was originally
+  built against — without this fix, a downstream stack that imports
+  `@microagi/alchemy-gcp` against current alchemy fails to load with
+  `SyntaxError: Export named 'loadOrConfigure' not found`.
+
+- **`GCP.ArtifactRegistryRepository` diff** — `somePropsAreDifferent`
+  uses `!==` reference equality, which is always `true` for the
+  `remoteRepositoryConfig` object after JSON round-trip through the
+  state store. A plan against an unchanged stack would show
+  `replace` (destroy + recreate), which on a remote repository
+  destroys the pull-through cache. The diff now uses `deepEqual` for
+  `remoteRepositoryConfig` and keeps `somePropsAreDifferent` only for
+  string-typed stables.
+
 ## 0.5.0 — 2026-06-07
 
 Artifact Registry (artifactregistry v1) — Docker repositories, both

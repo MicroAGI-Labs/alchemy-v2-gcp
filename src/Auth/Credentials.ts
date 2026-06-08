@@ -1,6 +1,6 @@
 import { ConfigError, Credentials } from "@distilled.cloud/gcp";
 import { getAuthProvider } from "alchemy/Auth/AuthProvider";
-import { ALCHEMY_PROFILE, loadOrConfigure } from "alchemy/Auth/Profile";
+import { ALCHEMY_PROFILE, Profile } from "alchemy/Auth/Profile";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -51,6 +51,7 @@ export const fromAuthProvider = () =>
   Layer.effect(
     Credentials,
     Effect.gen(function* () {
+      const profile = yield* Profile;
       const auth = yield* getAuthProvider<
         GCPAuthConfig,
         GCPResolvedCredentials
@@ -59,7 +60,7 @@ export const fromAuthProvider = () =>
       const ci = yield* Config.boolean("CI").pipe(Config.withDefault(false));
       const ctx = yield* Effect.context<never>();
 
-      return yield* loadOrConfigure(auth, profileName, { ci }).pipe(
+      return yield* profile.loadOrConfigure(auth, profileName, { ci }).pipe(
         Effect.flatMap((cfg) => auth.read(profileName, cfg as GCPAuthConfig)),
         Effect.map(({ accessToken, project }) => ({ accessToken, project })),
         Effect.mapError(toConfigError),

@@ -13,7 +13,7 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
-    "types": ["@types/node"],
+    "types": ["@types/node", "@types/bun"],
     "customConditions": ["bun"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

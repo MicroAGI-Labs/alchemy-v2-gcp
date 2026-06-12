@@ -113,8 +113,31 @@ export type NodePoolProps = {
       enableSecureBoot?: boolean;
       enableIntegrityMonitoring?: boolean;
     };
-    /** Local SSDs. **Replace-only**. */
+    /**
+     * Local SSDs via the legacy SCSI-era count field. Prefer
+     * `localNvmeSsdBlockConfig` / `ephemeralStorageLocalSsdConfig` for
+     * NVMe-only machine families (Gen3+, Titanium SSD). Mutually
+     * exclusive with both. **Replace-only**.
+     */
     localSsdCount?: number;
+    /**
+     * Raw-block local NVMe SSDs — exposed to workloads as unformatted
+     * block devices (local PVs / your own RAID). For machine types with
+     * a fixed disk count (e.g. g4-standard-48 → 4), `localSsdCount`
+     * must equal that count or be 0/unset for the machine default.
+     * **Replace-only**.
+     */
+    localNvmeSsdBlockConfig?: { localSsdCount?: number };
+    /**
+     * Local NVMe SSDs backing node ephemeral storage (emptyDir, image
+     * layers, logs) — GKE RAID0s the disks. Same fixed-count rule as
+     * `localNvmeSsdBlockConfig`. `dataCacheCount` carves disks out for
+     * GKE Data Cache. **Replace-only**.
+     */
+    ephemeralStorageLocalSsdConfig?: {
+      localSsdCount?: number;
+      dataCacheCount?: number;
+    };
     /** Workload Identity metadata. Mutable via `update`. */
     workloadMetadataConfig?: { mode: "GKE_METADATA" | "GCE_METADATA" };
     /** GVNIC. Mutable via `update`. */
@@ -261,6 +284,12 @@ export const toNodeConfigCreateBody = (
     ...(config.localSsdCount !== undefined
       ? { localSsdCount: config.localSsdCount }
       : {}),
+    ...(config.localNvmeSsdBlockConfig
+      ? { localNvmeSsdBlockConfig: config.localNvmeSsdBlockConfig }
+      : {}),
+    ...(config.ephemeralStorageLocalSsdConfig
+      ? { ephemeralStorageLocalSsdConfig: config.ephemeralStorageLocalSsdConfig }
+      : {}),
     ...(config.workloadMetadataConfig
       ? { workloadMetadataConfig: config.workloadMetadataConfig }
       : {}),
@@ -320,8 +349,23 @@ const toNodePoolUpdateBody = (
   if (nc.taints && !deepEqual(oc.taints ?? [], nc.taints)) {
     body.taints = { taints: nc.taints };
   }
-  if (!deepEqual(oc.resourceLabels ?? {}, desiredResourceLabels)) {
-    body.resourceLabels = { labels: desiredResourceLabels };
+  // GKE injects its own `goog-*` resource labels (accelerator type,
+  // provisioning model, …) after create. Treat them as server-managed:
+  // fold the observed ones into the desired set before diffing, or
+  // every reconcile issues a labels update — which on a large pool is
+  // a long rolling cluster operation that wedges all other mutations
+  // on the cluster ("incompatible operation").
+  const observedResourceLabels = oc.resourceLabels ?? {};
+  const desiredWithServerManaged = {
+    ...Object.fromEntries(
+      Object.entries(observedResourceLabels).filter(([k]) =>
+        k.startsWith("goog-"),
+      ),
+    ),
+    ...desiredResourceLabels,
+  };
+  if (!deepEqual(observedResourceLabels, desiredWithServerManaged)) {
+    body.resourceLabels = { labels: desiredWithServerManaged };
   }
 
   if (nc.gvnic && !deepEqual(oc.gvnic, nc.gvnic)) {
@@ -365,6 +409,7 @@ export const NodePoolProvider = () =>
     NodePool,
     Effect.gen(function* () {
       const getNodePools = yield* cont.getProjectsLocationsClustersNodePools;
+      const listNodePools = yield* cont.listProjectsLocationsClustersNodePools;
       const createNodePools = yield* cont.createProjectsLocationsClustersNodePools;
       const updateNodePools = yield* cont.updateProjectsLocationsClustersNodePools;
       const setSize = yield* cont.setSizeProjectsLocationsClustersNodePools;
@@ -500,7 +545,12 @@ export const NodePoolProvider = () =>
             !deepEqual(oc.metadata, nc.metadata) ||
             !deepEqual(oc.sandboxConfig, nc.sandboxConfig) ||
             !deepEqual(oc.reservationAffinity, nc.reservationAffinity) ||
-            !deepEqual(oc.shieldedInstanceConfig, nc.shieldedInstanceConfig)
+            !deepEqual(oc.shieldedInstanceConfig, nc.shieldedInstanceConfig) ||
+            !deepEqual(oc.localNvmeSsdBlockConfig, nc.localNvmeSsdBlockConfig) ||
+            !deepEqual(
+              oc.ephemeralStorageLocalSsdConfig,
+              nc.ephemeralStorageLocalSsdConfig,
+            )
           ) {
             return { action: "replace" } as const;
           }
@@ -596,15 +646,39 @@ export const NodePoolProvider = () =>
           const location = output?.location ?? olds?.location;
           const clusterName = output?.clusterName ?? olds?.clusterName;
           if (!project || !location || !clusterName) return undefined;
-          const name =
-            output?.name ??
-            olds?.name ??
-            (yield* createPhysicalName({ id, maxLength: 40 })).toLowerCase();
-          const fqName = `projects/${project}/locations/${location}/clusters/${clusterName}/nodePools/${name}`;
-          const observed = yield* getNodePools({ name: fqName }).pipe(
-            Effect.catchTag("NotFound", () => Effect.succeed(undefined as cont.NodePool | undefined)),
-            Effect.catchTag("Forbidden", () => Effect.succeed(undefined as cont.NodePool | undefined)),
-          );
+          const name = output?.name ?? olds?.name;
+          let observed: cont.NodePool | undefined;
+          if (name) {
+            const fqName = `projects/${project}/locations/${location}/clusters/${clusterName}/nodePools/${name}`;
+            observed = yield* getNodePools({ name: fqName }).pipe(
+              Effect.catchTag("NotFound", () => Effect.succeed(undefined as cont.NodePool | undefined)),
+              Effect.catchTag("Forbidden", () => Effect.succeed(undefined as cont.NodePool | undefined)),
+            );
+          } else {
+            // Cold recovery (lost state): the pool name truncates the
+            // logical id and appends a random per-instance suffix that
+            // lived only in state, so a probe against a freshly-generated
+            // name can never hit. Scan the cluster's pools for our
+            // alchemy labels (stamped into config.resourceLabels).
+            const page = yield* listNodePools({
+              parent: `projects/${project}/locations/${location}/clusters/${clusterName}`,
+            }).pipe(
+              Effect.catchTag("NotFound", () =>
+                Effect.succeed(undefined as cont.ListNodePoolsResponse | undefined),
+              ),
+              Effect.catchTag("Forbidden", () =>
+                Effect.succeed(undefined as cont.ListNodePoolsResponse | undefined),
+              ),
+            );
+            for (const candidate of page?.nodePools ?? []) {
+              if (
+                yield* hasAlchemyLabels(id, candidate.config?.resourceLabels)
+              ) {
+                observed = candidate;
+                break;
+              }
+            }
+          }
           if (!observed) return undefined;
           const attrs = toNodePoolAttributes(observed, {
             project,

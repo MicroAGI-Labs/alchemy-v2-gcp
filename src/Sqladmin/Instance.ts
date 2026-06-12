@@ -355,6 +355,7 @@ export const SqlInstanceProvider = () =>
     SqlInstance,
     Effect.gen(function* () {
       const getInstances = yield* sql.getInstances;
+      const listInstances = yield* sql.listInstances;
       const insertInstances = yield* sql.insertInstances;
       const patchInstances = yield* sql.patchInstances;
       const deleteInstances = yield* sql.deleteInstances;
@@ -604,13 +605,41 @@ export const SqlInstanceProvider = () =>
           const project = output?.project ?? olds?.project;
           const region = output?.region ?? olds?.region;
           if (!project || !region) return undefined;
-          const name =
-            output?.name ??
-            olds?.name ??
-            (yield* createPhysicalName({ id, maxLength: 98 })).toLowerCase();
-          const observed = yield* observe(project, name);
-          if (!observed) return undefined;
-          const attrs = toAttributes(observed, { project, region, name });
+          const name = output?.name ?? olds?.name;
+          let observed: sql.DatabaseInstance | undefined;
+          if (name) {
+            observed = yield* observe(project, name);
+          } else {
+            // Cold recovery (lost state): the physical name carries a
+            // random per-instance suffix that lived only in state, so a
+            // probe against a freshly-generated name can never hit. Scan
+            // the project's instances for our alchemy labels instead.
+            const page = yield* listInstances({
+              project,
+              maxResults: 500,
+            }).pipe(
+              Effect.catchTag("NotFound", () =>
+                Effect.succeed(undefined as sql.InstancesListResponse | undefined),
+              ),
+              Effect.catchTag("Forbidden", () =>
+                Effect.succeed(undefined as sql.InstancesListResponse | undefined),
+              ),
+            );
+            for (const candidate of page?.items ?? []) {
+              if (
+                yield* hasAlchemyLabels(id, candidate.settings?.userLabels)
+              ) {
+                observed = candidate;
+                break;
+              }
+            }
+          }
+          if (!observed?.name) return undefined;
+          const attrs = toAttributes(observed, {
+            project,
+            region,
+            name: observed.name,
+          });
           return (yield* hasAlchemyLabels(id, observed.settings?.userLabels))
             ? attrs
             : Unowned(attrs);

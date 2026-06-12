@@ -229,6 +229,7 @@ export const ManagedLustreInstanceProvider = () =>
     ManagedLustreInstance,
     Effect.gen(function* () {
       const getInstance = yield* lustre.getProjectsLocationsInstances;
+      const listInstances = yield* lustre.listProjectsLocationsInstances;
       const createInstance = yield* lustre.createProjectsLocationsInstances;
       const patchInstance = yield* lustre.patchProjectsLocationsInstances;
       const deleteInstance = yield* lustre.deleteProjectsLocationsInstances;
@@ -403,12 +404,40 @@ export const ManagedLustreInstanceProvider = () =>
           const location = output?.location ?? olds?.location;
           const network = output?.network ?? olds?.network;
           if (!project || !location || !network) return undefined;
-          const instanceId =
-            output?.instanceId ??
-            olds?.instanceId ??
-            (yield* createPhysicalName({ id, maxLength: 63 })).toLowerCase();
-          const observed = yield* observe(project, location, instanceId);
-          if (!observed) return undefined;
+          const persistedId = output?.instanceId ?? olds?.instanceId;
+          let observed: lustre.Instance | undefined;
+          if (persistedId) {
+            observed = yield* observe(project, location, persistedId);
+          } else {
+            // Cold recovery (lost state): the instance id carries a
+            // random per-instance suffix that lived only in state, so a
+            // probe against a freshly-generated id can never hit. Scan
+            // the location's instances for our alchemy labels instead.
+            const page = yield* listInstances({
+              parent: `projects/${project}/locations/${location}`,
+            }).pipe(
+              Effect.catchTag("NotFound", () =>
+                Effect.succeed(
+                  undefined as lustre.ListInstancesResponse | undefined,
+                ),
+              ),
+              Effect.catchTag("Forbidden", () =>
+                Effect.succeed(
+                  undefined as lustre.ListInstancesResponse | undefined,
+                ),
+              ),
+            );
+            for (const candidate of page?.instances ?? []) {
+              if (yield* hasAlchemyLabels(id, candidate.labels)) {
+                observed = candidate;
+                break;
+              }
+            }
+          }
+          if (!observed?.name) return undefined;
+          // `name` is the full resource path; the instance id is its
+          // last segment.
+          const instanceId = observed.name.split("/").pop()!;
           const attrs = toAttributes(observed, {
             project,
             location,

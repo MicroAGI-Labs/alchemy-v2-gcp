@@ -1,6 +1,6 @@
 import { ConfigError, Credentials } from "@distilled.cloud/gcp";
 import { getAuthProvider } from "alchemy/Auth/AuthProvider";
-import { ALCHEMY_PROFILE, Profile } from "alchemy/Auth/Profile";
+import { ALCHEMY_PROFILE, AlchemyProfile } from "alchemy/Auth/Profile";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -29,11 +29,17 @@ const toConfigError = (e: { message?: string } | unknown) =>
  *
  * Prefer {@link fromAuthProvider} when the stack runs through
  * `alchemy login` / `ALCHEMY_PROFILE`.
+ *
+ * The `Credentials` service is lazy (its value is an `Effect<Config>`
+ * re-evaluated per SDK call), so minting happens at request time —
+ * `google-auth-library` caches and refreshes underneath. Failures
+ * become defects: the service channel carries no typed error, matching
+ * distilled's own `CredentialsFromEnv`.
  */
 export const fromADC = (project?: string) =>
-  Layer.effect(
+  Layer.succeed(
     Credentials,
-    mintToken({ project }).pipe(Effect.mapError(toConfigError)),
+    mintToken({ project }).pipe(Effect.mapError(toConfigError), Effect.orDie),
   );
 
 /**
@@ -51,7 +57,7 @@ export const fromAuthProvider = () =>
   Layer.effect(
     Credentials,
     Effect.gen(function* () {
-      const profile = yield* Profile;
+      const profile = yield* AlchemyProfile;
       const auth = yield* getAuthProvider<
         GCPAuthConfig,
         GCPResolvedCredentials
@@ -60,11 +66,15 @@ export const fromAuthProvider = () =>
       const ci = yield* Config.boolean("CI").pipe(Config.withDefault(false));
       const ctx = yield* Effect.context<never>();
 
-      return yield* profile.loadOrConfigure(auth, profileName, { ci }).pipe(
+      // The service value is itself an Effect (lazy credentials):
+      // profile/provider wiring resolves once at layer build, while
+      // loadOrConfigure + token read run per SDK call.
+      return profile.loadOrConfigure(auth, profileName, { ci }).pipe(
         Effect.flatMap((cfg) => auth.read(profileName, cfg as GCPAuthConfig)),
         Effect.map(({ accessToken, project }) => ({ accessToken, project })),
         Effect.mapError(toConfigError),
         Effect.provide(ctx),
+        Effect.orDie,
       );
     }),
   );

@@ -7,6 +7,7 @@ import {
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
+import { Firewall, FirewallProvider } from "./Compute/Firewall.ts";
 import { GlobalAddress, GlobalAddressProvider } from "./Compute/GlobalAddress.ts";
 import { Network, NetworkProvider } from "./Compute/Network.ts";
 import { SharedVpcHost, SharedVpcHostProvider } from "./Compute/SharedVpcHost.ts";
@@ -61,6 +62,7 @@ export const providers = () =>
       ApiEnable,
       Network,
       Subnetwork,
+      Firewall,
       GlobalAddress,
       SharedVpcHost,
       SharedVpcServiceProject,
@@ -82,6 +84,7 @@ export const providers = () =>
         ApiEnableProvider(),
         NetworkProvider(),
         SubnetworkProvider(),
+        FirewallProvider(),
         GlobalAddressProvider(),
         SharedVpcHostProvider(),
         SharedVpcServiceProjectProvider(),

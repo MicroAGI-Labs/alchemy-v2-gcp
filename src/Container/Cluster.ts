@@ -74,6 +74,26 @@ export type ClusterProps = {
     clusterSecondaryRangeName?: string;
     servicesSecondaryRangeName?: string;
   };
+  /**
+   * Cluster-level network settings. `datapathProvider:
+   * "ADVANCED_DATAPATH"` enables GKE Dataplane V2 (eBPF/Cilium
+   * dataplane with built-in NetworkPolicy enforcement). GKE only
+   * honors this at cluster creation — existing clusters cannot be
+   * migrated in place.
+   *
+   * **Consumed only on the create path** (like `initialNodePool`):
+   * changing it on an existing cluster is a silent no-op, NOT a
+   * replace trigger. A diff-driven same-name replace would be
+   * destructive here — the engine creates the new generation first,
+   * which observe-adopts the still-existing same-name cluster, and
+   * end-of-deploy GC would then delete that physical cluster out from
+   * under the "new" generation. To rebuild with a different datapath,
+   * delete the cluster out-of-band and redeploy; reconcile observes
+   * it missing and creates with the new setting.
+   */
+  networkConfig?: {
+    datapathProvider?: "LEGACY_DATAPATH" | "ADVANCED_DATAPATH";
+  };
   /** GKE release channel. Mutable via `update` (`desiredReleaseChannel`). */
   releaseChannel?: { channel: "RAPID" | "REGULAR" | "STABLE" | "UNSPECIFIED" };
   /**
@@ -470,8 +490,10 @@ export const ClusterProvider = () =>
           if (!deepEqual(olds.ipAllocationPolicy, news.ipAllocationPolicy)) {
             return { action: "replace" } as const;
           }
-          // `initialNodePool` is intentionally NOT part of diff — it is
-          // consumed only on create. See ClusterProps JSDoc.
+          // `initialNodePool` and `networkConfig` are intentionally NOT
+          // part of diff — both are consumed only on create. See the
+          // ClusterProps JSDoc (networkConfig explains why a same-name
+          // replace would be destructive).
           return undefined;
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
@@ -521,6 +543,7 @@ export const ClusterProvider = () =>
                   ...(news.ipAllocationPolicy
                     ? { ipAllocationPolicy: news.ipAllocationPolicy }
                     : {}),
+                  ...(news.networkConfig ? { networkConfig: news.networkConfig } : {}),
                   ...(news.releaseChannel ? { releaseChannel: news.releaseChannel } : {}),
                   ...(news.workloadIdentityConfig
                     ? { workloadIdentityConfig: news.workloadIdentityConfig }

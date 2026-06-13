@@ -1,4 +1,6 @@
+export * from "./Address.ts";
 export * from "./Firewall.ts";
+export * from "./ForwardingRule.ts";
 export * from "./GlobalAddress.ts";
 export * from "./Network.ts";
 export * from "./SharedVpcHost.ts";

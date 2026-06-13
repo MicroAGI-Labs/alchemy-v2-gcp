@@ -7,7 +7,12 @@ import {
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
+import { Address, AddressProvider } from "./Compute/Address.ts";
 import { Firewall, FirewallProvider } from "./Compute/Firewall.ts";
+import {
+  ForwardingRule,
+  ForwardingRuleProvider,
+} from "./Compute/ForwardingRule.ts";
 import { GlobalAddress, GlobalAddressProvider } from "./Compute/GlobalAddress.ts";
 import { Network, NetworkProvider } from "./Compute/Network.ts";
 import { SharedVpcHost, SharedVpcHostProvider } from "./Compute/SharedVpcHost.ts";
@@ -63,6 +68,8 @@ export const providers = () =>
       Network,
       Subnetwork,
       Firewall,
+      Address,
+      ForwardingRule,
       GlobalAddress,
       SharedVpcHost,
       SharedVpcServiceProject,
@@ -85,6 +92,8 @@ export const providers = () =>
         NetworkProvider(),
         SubnetworkProvider(),
         FirewallProvider(),
+        AddressProvider(),
+        ForwardingRuleProvider(),
         GlobalAddressProvider(),
         SharedVpcHostProvider(),
         SharedVpcServiceProjectProvider(),

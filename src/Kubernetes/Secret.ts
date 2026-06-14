@@ -162,19 +162,30 @@ export const KubernetesSecretProvider = () =>
         // so it never changes on update. caCertificate is intentionally
         // excluded: it can rotate on the same cluster.
         stables: ["name", "namespace", "endpoint", "uid"],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ id, news, olds = {} }) {
           if (!isResolved(news)) return undefined;
-          // `endpoint` identifies the target cluster — a change points at
-          // a different cluster, so replace (create on the new one, delete
-          // on the old) rather than an in-place SSA that would orphan the
-          // old Secret. `caCertificate` is intentionally NOT here: it can
-          // rotate on the same cluster and should just re-apply.
+          const o = olds as KubernetesSecretProps;
+          // Compare the RESOLVED name and type (with their defaults
+          // applied), not the raw props — otherwise omitting `name` on one
+          // side and setting it to the generated physical name on the
+          // other (or the same for `type`/"Opaque") triggers a spurious
+          // replace.
+          const defaultName = (
+            yield* createPhysicalName({ id, maxLength: 63 })
+          ).toLowerCase();
+          const sameName = (o.name ?? defaultName) === (news.name ?? defaultName);
+          const sameType = (o.type ?? "Opaque") === (news.type ?? "Opaque");
+          // Replace (create new + delete old) rather than in-place SSA on:
+          // - `endpoint`: points at a different cluster (would orphan the
+          //   old Secret). caCertificate is excluded — it can rotate on
+          //   the same cluster and should just re-apply.
+          // - `namespace`/`name`: the object's identity.
+          // - `type`: immutable on a Kubernetes Secret; an in-place apply
+          //   with a new type is rejected by the API.
           if (
-            somePropsAreDifferent(olds as KubernetesSecretProps, news, [
-              "namespace",
-              "name",
-              "endpoint",
-            ])
+            !sameName ||
+            !sameType ||
+            somePropsAreDifferent(o, news, ["namespace", "endpoint"])
           ) {
             return { action: "replace" } as const;
           }
@@ -212,11 +223,13 @@ export const KubernetesSecretProvider = () =>
 
           // A 2xx apply normally echoes the object, but a successful
           // empty-body response is possible — re-read so we always return
-          // real attributes (uid/resourceVersion) rather than crash.
-          const final =
-            applied?.metadata
-              ? applied
-              : yield* observe(connection, news.namespace, desiredName);
+          // real attributes (uid/resourceVersion) rather than crash. Use
+          // getSecret (NOT observe): if the Secret is somehow absent after
+          // a successful apply, propagate the 404 and fail the reconcile
+          // instead of recording an empty success.
+          const final = applied?.metadata
+            ? applied
+            : yield* getSecret(connection, news.namespace, desiredName);
 
           return toAttributes(final, {
             name: desiredName,

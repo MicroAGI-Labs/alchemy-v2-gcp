@@ -156,7 +156,12 @@ export const KubernetesSecretProvider = () =>
     KubernetesSecret,
     Effect.gen(function* () {
       return {
-        stables: ["name", "namespace"],
+        // Attributes unchanged by an in-place update (so dependents can
+        // resolve them at plan time): identity (name/namespace), the
+        // server-assigned uid, and endpoint — which is a replace trigger,
+        // so it never changes on update. caCertificate is intentionally
+        // excluded: it can rotate on the same cluster.
+        stables: ["name", "namespace", "endpoint", "uid"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
           // `endpoint` identifies the target cluster — a change points at

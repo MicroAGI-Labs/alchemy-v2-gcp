@@ -14,11 +14,13 @@ import * as https from "node:https";
  * `HttpClient`): the GKE API server presents a certificate signed by the
  * *per-cluster* CA — not a public root — so the request must trust an
  * explicit, runtime-resolved `ca` PEM. This is the same justified TLS
- * exception upstream alchemy makes in its own Kubernetes client
- * (`vendor/alchemy/packages/alchemy/src/Kubernetes/client.ts`). All calls
- * are wrapped in `Effect.tryPromise` so they still participate in the
- * Effect runtime (tracing, interruption, typed errors).
+ * exception alchemy makes in its own (EKS-only) Kubernetes client. Calls
+ * are wrapped in `Effect.tryPromise` so failures surface as typed errors
+ * in the Effect runtime; a socket timeout bounds hung requests. (Effect
+ * interruption won't abort an in-flight socket — the timeout is what
+ * guarantees a deploy can't block forever.)
  */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Connection details for a single GKE control plane. */
 export interface GkeConnection {
@@ -79,6 +81,7 @@ const requestJson = Effect.fn("k8s.requestJson")(function* ({
                 : {}),
             },
             ca,
+            timeout: REQUEST_TIMEOUT_MS,
           },
           (response) => {
             const chunks: Buffer[] = [];
@@ -116,6 +119,18 @@ const requestJson = Effect.fn("k8s.requestJson")(function* ({
         );
 
         request.on("error", reject);
+        // `timeout` only fires the event — we must destroy the socket
+        // ourselves so the promise rejects instead of hanging.
+        request.on("timeout", () =>
+          request.destroy(
+            new KubernetesApiError({
+              method,
+              path,
+              statusCode: 0,
+              body: `request timed out after ${REQUEST_TIMEOUT_MS}ms`,
+            }),
+          ),
+        );
         if (payload) request.write(payload);
         request.end();
       }),

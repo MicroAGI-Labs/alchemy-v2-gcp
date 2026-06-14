@@ -159,10 +159,16 @@ export const KubernetesSecretProvider = () =>
         stables: ["name", "namespace"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
+          // `endpoint` identifies the target cluster — a change points at
+          // a different cluster, so replace (create on the new one, delete
+          // on the old) rather than an in-place SSA that would orphan the
+          // old Secret. `caCertificate` is intentionally NOT here: it can
+          // rotate on the same cluster and should just re-apply.
           if (
             somePropsAreDifferent(olds as KubernetesSecretProps, news, [
               "namespace",
               "name",
+              "endpoint",
             ])
           ) {
             return { action: "replace" } as const;

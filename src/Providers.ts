@@ -24,6 +24,10 @@ import { Subnetwork, SubnetworkProvider } from "./Compute/Subnetwork.ts";
 import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
 import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
 import {
+  KubernetesSecret,
+  KubernetesSecretProvider,
+} from "./Kubernetes/Secret.ts";
+import {
   ManagedLustreInstance,
   ManagedLustreInstanceProvider,
 } from "./ManagedLustre/Instance.ts";
@@ -81,6 +85,7 @@ export const providers = () =>
       SqlDatabase,
       SqlUser,
       ArtifactRegistryRepository,
+      KubernetesSecret,
     ]),
   ).pipe(
     Layer.provide(
@@ -105,6 +110,7 @@ export const providers = () =>
         SqlDatabaseProvider(),
         SqlUserProvider(),
         ArtifactRegistryRepositoryProvider(),
+        KubernetesSecretProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

@@ -111,7 +111,7 @@ export const KubernetesSecret = Resource<KubernetesSecret>(
 );
 
 const toAttributes = (
-  s: SecretObject,
+  s: SecretObject | undefined,
   parent: {
     name: string;
     namespace: string;
@@ -120,13 +120,13 @@ const toAttributes = (
     type: string;
   },
 ): KubernetesSecretAttributes => ({
-  name: s.metadata?.name ?? parent.name,
-  namespace: s.metadata?.namespace ?? parent.namespace,
+  name: s?.metadata?.name ?? parent.name,
+  namespace: s?.metadata?.namespace ?? parent.namespace,
   endpoint: parent.endpoint,
   caCertificate: parent.caCertificate,
-  type: s.type ?? parent.type,
-  uid: s.metadata?.uid,
-  resourceVersion: s.metadata?.resourceVersion,
+  type: s?.type ?? parent.type,
+  uid: s?.metadata?.uid,
+  resourceVersion: s?.metadata?.resourceVersion,
 });
 
 /** Mint a fresh GKE connection from props + ADC credentials. */
@@ -194,10 +194,11 @@ export const KubernetesSecretProvider = () =>
           // Unwrap any Redacted values at the last moment — Redacted is
           // kept opaque through Output resolution, so it arrives here as
           // a Redacted object that would JSON-serialize to "<redacted>"
-          // if passed through verbatim.
-          const stringData: Record<string, string> = {};
+          // if passed through verbatim — then base64-encode for `data`.
+          const data: Record<string, string> = {};
           for (const [k, v] of Object.entries(news.stringData)) {
-            stringData[k] = Redacted.isRedacted(v) ? Redacted.value(v) : v;
+            const raw = Redacted.isRedacted(v) ? Redacted.value(v) : v;
+            data[k] = Buffer.from(raw, "utf8").toString("base64");
           }
 
           // Server-side apply is an idempotent upsert — it both creates
@@ -206,10 +207,18 @@ export const KubernetesSecretProvider = () =>
           const applied = yield* applySecret(connection, {
             metadata: { name: desiredName, namespace: news.namespace, labels },
             type: desiredType,
-            stringData,
+            data,
           });
 
-          return toAttributes(applied, {
+          // A 2xx apply normally echoes the object, but a successful
+          // empty-body response is possible — re-read so we always return
+          // real attributes (uid/resourceVersion) rather than crash.
+          const final =
+            applied?.metadata
+              ? applied
+              : yield* observe(connection, news.namespace, desiredName);
+
+          return toAttributes(final, {
             name: desiredName,
             namespace: news.namespace,
             endpoint: news.endpoint,

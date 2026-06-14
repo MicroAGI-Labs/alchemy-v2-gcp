@@ -178,13 +178,18 @@ export const getSecret = (
 /**
  * Server-side apply a Secret (idempotent create-or-update). `force=true`
  * makes alchemy the field manager even if another manager owns fields.
+ *
+ * Values go through `data` (base64), NOT `stringData`: server-side apply
+ * tracks the field manager's ownership of `data` keys, so dropping a key
+ * from a later apply prunes it from the stored Secret. `stringData` is
+ * write-only/ephemeral and isn't tracked, which would leave stale keys.
  */
 export const applySecret = (
   connection: GkeConnection,
   secret: {
     metadata: { name: string; namespace: string; labels?: Record<string, string> };
     type: string;
-    stringData: Record<string, string>;
+    data: Record<string, string>;
   },
 ) =>
   requestJson({
@@ -193,7 +198,7 @@ export const applySecret = (
     path: `${secretPath(secret.metadata.namespace, secret.metadata.name)}?fieldManager=alchemy&force=true`,
     contentType: "application/apply-patch+yaml",
     body: { apiVersion: "v1", kind: "Secret", ...secret },
-  }) as Effect.Effect<SecretObject, KubernetesApiError>;
+  }) as Effect.Effect<SecretObject | undefined, KubernetesApiError>;
 
 /** DELETE a Secret; 404 is tolerated as success (idempotent teardown). */
 export const deleteSecret = (

@@ -45,11 +45,15 @@ const program = Effect.gen(function* () {
     Effect.catchTag("NotFound", () => Effect.void),
   );
 
-  // CREATE
+  // CREATE — with a foreign annotation we expect replace to PRESERVE (#3).
   const created = yield* createCoreV1NamespacedSecret({
     namespace,
     fieldManager: "alchemy",
-    metadata: { name, labels: { "alchemy_app": "probe" } },
+    metadata: {
+      name,
+      labels: { "alchemy_app": "probe" },
+      annotations: { "probe.microagi/keep": "yes" },
+    },
     type: "Opaque",
     data: { hello: b64("world") },
   }).pipe(Effect.provide(layer));
@@ -64,14 +68,16 @@ const program = Effect.gen(function* () {
   const decoded1 = Buffer.from(read1.data?.hello ?? "", "base64").toString("utf8");
   console.log(`READ ok: data.hello=${JSON.stringify(decoded1)} (expect "world")`);
 
-  // REPLACE (full PUT, carrying the observed resourceVersion)
+  // REPLACE — read-modify-write (mirrors Secret.ts replaceFrom): spread the
+  // observed metadata so the foreign annotation survives the full-object PUT.
   const replaced = yield* replaceCoreV1NamespacedSecret({
     namespace,
     name,
     fieldManager: "alchemy",
     metadata: {
+      ...read1.metadata,
       name,
-      labels: { "alchemy_app": "probe" },
+      labels: { ...read1.metadata?.labels, "alchemy_app": "probe" },
       resourceVersion: read1.metadata?.resourceVersion,
     },
     type: "Opaque",
@@ -84,7 +90,9 @@ const program = Effect.gen(function* () {
     Effect.provide(layer),
   );
   const decoded2 = Buffer.from(read2.data?.hello ?? "", "base64").toString("utf8");
+  const keptAnnotation = read2.metadata?.annotations?.["probe.microagi/keep"];
   console.log(`READ ok: data.hello=${JSON.stringify(decoded2)} (expect "updated")`);
+  console.log(`ANNOTATION preserved across replace: ${JSON.stringify(keptAnnotation)} (expect "yes")`);
 
   // DELETE
   yield* deleteCoreV1NamespacedSecret({ namespace, name }).pipe(
@@ -98,7 +106,10 @@ const program = Effect.gen(function* () {
   console.log(`DELETE ok: read-after-delete=${gone === "gone" ? "NotFound ✓" : "STILL PRESENT ✗"}`);
 
   const pass =
-    decoded1 === "world" && decoded2 === "updated" && gone === "gone";
+    decoded1 === "world" &&
+    decoded2 === "updated" &&
+    keptAnnotation === "yes" &&
+    gone === "gone";
   console.log(pass ? "\n✅ create+replace upsert lifecycle PASSED" : "\n❌ FAILED");
 });
 

@@ -246,9 +246,19 @@ export const KubernetesSecretProvider = () =>
               namespace: news.namespace,
               name: desiredName,
               fieldManager: "alchemy",
+              // Read-modify-write: a PUT replaces the WHOLE object, so preserve
+              // the observed metadata (annotations, ownerReferences, finalizers,
+              // …) and overlay only what we manage — otherwise every reconcile
+              // strips fields other managers set (e.g. an ownerReference, which
+              // would break garbage collection). `observed.metadata` carries the
+              // full server object at runtime (the local type is a subset).
+              // Labels merge (ours win) so foreign labels survive too. (The SSA
+              // path — GCP.KubernetesManifest — does field-level pruning instead;
+              // the typed PUT path deliberately preserves rather than prunes.)
               metadata: {
+                ...observed.metadata,
                 name: desiredName,
-                labels,
+                labels: { ...observed.metadata?.labels, ...labels },
                 resourceVersion: observed.metadata?.resourceVersion,
               },
               type: desiredType,

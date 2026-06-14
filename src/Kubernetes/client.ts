@@ -268,6 +268,30 @@ const objectPath = (
 };
 
 /**
+ * Guard against building a `/namespaces/undefined/…` path: a namespaced Kind
+ * with no namespace would otherwise GET/DELETE a bogus URL — the API returns
+ * 404, which read treats as "absent" (phantom recreate) and delete tolerates as
+ * success (orphan). Fail loudly instead. (No-op for cluster-scoped Kinds.)
+ */
+const requireNamespace = (
+  method: string,
+  apiVersion: string,
+  kind: string,
+  info: ResourceInfo,
+  namespace: string | undefined,
+): Effect.Effect<void, KubernetesApiError> =>
+  info.namespaced && !namespace
+    ? Effect.fail(
+        new KubernetesApiError({
+          method,
+          path: "",
+          statusCode: 0,
+          body: `${apiVersion}/${kind} is namespaced — a namespace is required`,
+        }),
+      )
+    : Effect.void;
+
+/**
  * Server-side apply an arbitrary object (idempotent create-or-converge).
  * `force=true` makes alchemy the field manager even where another manager
  * currently owns a field we declare. Only the fields present in `object` are
@@ -294,26 +318,20 @@ export const applyObject = (
     );
   }
   return resolveResource(connection, apiVersion, kind).pipe(
-    Effect.flatMap((info) => {
-      if (info.namespaced && !namespace) {
-        return Effect.fail(
-          new KubernetesApiError({
+    Effect.flatMap((info) =>
+      requireNamespace("PATCH", apiVersion, kind, info, namespace).pipe(
+        Effect.flatMap(() => {
+          const path = `${objectPath(apiVersion, info, namespace, name)}?fieldManager=${fieldManager}&force=true`;
+          return requestJson({
+            connection,
             method: "PATCH",
-            path: "",
-            statusCode: 0,
-            body: `${apiVersion}/${kind} is namespaced — metadata.namespace is required`,
-          }),
-        );
-      }
-      const path = `${objectPath(apiVersion, info, namespace, name)}?fieldManager=${fieldManager}&force=true`;
-      return requestJson({
-        connection,
-        method: "PATCH",
-        path,
-        contentType: "application/apply-patch+yaml",
-        body: object as Record<string, unknown>,
-      }) as Effect.Effect<KubeObject | undefined, KubernetesApiError>;
-    }),
+            path,
+            contentType: "application/apply-patch+yaml",
+            body: object as Record<string, unknown>,
+          }) as Effect.Effect<KubeObject | undefined, KubernetesApiError>;
+        }),
+      ),
+    ),
   );
 };
 
@@ -326,13 +344,17 @@ export const getObject = (
   name: string,
 ): Effect.Effect<KubeObject, KubernetesApiError> =>
   resolveResource(connection, apiVersion, kind).pipe(
-    Effect.flatMap(
-      (info) =>
-        requestJson({
-          connection,
-          method: "GET",
-          path: objectPath(apiVersion, info, namespace, name),
-        }) as Effect.Effect<KubeObject, KubernetesApiError>,
+    Effect.flatMap((info) =>
+      requireNamespace("GET", apiVersion, kind, info, namespace).pipe(
+        Effect.flatMap(
+          () =>
+            requestJson({
+              connection,
+              method: "GET",
+              path: objectPath(apiVersion, info, namespace, name),
+            }) as Effect.Effect<KubeObject, KubernetesApiError>,
+        ),
+      ),
     ),
   );
 
@@ -346,11 +368,15 @@ export const deleteObject = (
 ): Effect.Effect<void, KubernetesApiError> =>
   resolveResource(connection, apiVersion, kind).pipe(
     Effect.flatMap((info) =>
-      requestJson({
-        connection,
-        method: "DELETE",
-        path: objectPath(apiVersion, info, namespace, name),
-      }),
+      requireNamespace("DELETE", apiVersion, kind, info, namespace).pipe(
+        Effect.flatMap(() =>
+          requestJson({
+            connection,
+            method: "DELETE",
+            path: objectPath(apiVersion, info, namespace, name),
+          }),
+        ),
+      ),
     ),
     Effect.catchIf(
       (e): e is KubernetesApiError =>

@@ -1,4 +1,10 @@
 import { Credentials } from "@distilled.cloud/gcp";
+import {
+  createCoreV1NamespacedSecret,
+  deleteCoreV1NamespacedSecret,
+  readCoreV1NamespacedSecret,
+  replaceCoreV1NamespacedSecret,
+} from "@distilled.cloud/kubernetes/core";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
@@ -8,35 +14,36 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import type * as GCP from "../Providers.ts";
 import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
-import {
-  applySecret,
-  deleteSecret,
-  getSecret,
-  KubernetesApiError,
-  type GkeConnection,
-  type SecretObject,
-} from "./client.ts";
+import { clusterLayer, type ClusterConnection } from "./connection.ts";
 
 /**
  * An Opaque Kubernetes Secret in a GKE cluster.
  *
- * Unlike the rest of the GCP provider (which calls typed
- * `@distilled.cloud/gcp` operations), this resource talks directly to a
- * GKE cluster's Kubernetes API server — alchemy's upstream Kubernetes
- * provider is EKS-only. The control-plane connection (`endpoint` +
- * `caCertificate`) comes from a {@link GCP.Cluster}'s attributes; the
- * bearer token is minted from the provider's ADC {@link Credentials}.
+ * Driven through the typed `@distilled.cloud/kubernetes` SDK (core/v1) rather
+ * than alchemy's upstream Kubernetes provider, which is EKS-only. The
+ * control-plane connection (`endpoint` + `caCertificate`) comes from a
+ * {@link GCP.Cluster}'s attributes; the bearer token is minted from the
+ * provider's ADC {@link Credentials} and threaded into the cluster via
+ * {@link clusterLayer} (which also trusts the per-cluster CA).
  *
- * Ownership for adoption is gated on alchemy-internal `metadata.labels`
- * (same triple as labelled GCP resources), so a Secret created out of
- * band reads back as {@link Unowned} until adopted.
+ * Convergence is a typed **create-or-replace upsert** (not server-side apply):
+ * `reconcile` reads the Secret, then `createCoreV1NamespacedSecret` if absent
+ * or `replaceCoreV1NamespacedSecret` (a full PUT, carrying the observed
+ * `resourceVersion` for optimistic concurrency) if present. A `PUT` is a full
+ * object replacement, so dropping a key from `data` removes it from the stored
+ * Secret — the same pruning SSA gave us, without needing the
+ * `application/apply-patch+yaml` content type the typed PATCH op can't express.
+ *
+ * Ownership for adoption is gated on alchemy-internal `metadata.labels` (same
+ * triple as labelled GCP resources), so a Secret created out of band reads back
+ * as {@link Unowned} until adopted.
  *
  * @section Creating a Secret
  * @example Wire a Cloudflare tunnel token into the cluster
  * ```typescript
  * // `tunnel.token` is a `Redacted<string>`; pass it straight through —
- * // the value is unwrapped only at the moment it's written to the API,
- * // and stays redacted in logs/plan output.
+ * // the value is unwrapped only at the moment it's written to the API, and
+ * // stays redacted in logs/plan output.
  * yield* GCP.KubernetesSecret("CloudflaredTunnelSecret", {
  *   endpoint: cluster.endpoint,
  *   caCertificate: cluster.clusterCaCertificate,
@@ -67,15 +74,14 @@ export type KubernetesSecretProps = {
   /** Secret `type`. Default `"Opaque"`. Mutable. */
   type?: string;
   /**
-   * String data (written under `stringData`; UTF-8 values). Mutable.
+   * String data (UTF-8 values, base64-encoded on the way to the API). Mutable.
    *
-   * Values may be `Redacted<string>` (e.g. a resource's secret output
-   * like `tunnel.token`) — they are unwrapped only when written to the
-   * Kubernetes API and stay opaque in logs/plan output. Plain strings
-   * are accepted too.
+   * Values may be `Redacted<string>` (e.g. a resource's secret output like
+   * `tunnel.token`) — they are unwrapped only when written to the Kubernetes
+   * API and stay opaque in logs/plan output. Plain strings are accepted too.
    *
-   * NOTE: the underlying values are persisted in alchemy stack state
-   * (the engine diffs on the real value) — protect the state backend.
+   * NOTE: the underlying values are persisted in alchemy stack state (the
+   * engine diffs on the real value) — protect the state backend.
    */
   stringData: Record<string, Redacted.Redacted<string> | string>;
   /** Extra metadata labels (alchemy ownership labels merge on top). Mutable. */
@@ -110,6 +116,18 @@ export const KubernetesSecret = Resource<KubernetesSecret>(
   "GCP.KubernetesSecret",
 );
 
+/** The subset of a distilled Secret response we read back. */
+type SecretObject = {
+  metadata?: {
+    name?: string;
+    namespace?: string;
+    uid?: string;
+    resourceVersion?: string;
+    labels?: Record<string, string>;
+  };
+  type?: string;
+};
+
 const toAttributes = (
   s: SecretObject | undefined,
   parent: {
@@ -138,50 +156,66 @@ const connect = Effect.fn("k8sSecret.connect")(function* (props: {
   return {
     endpoint: props.endpoint,
     caCertificate: props.caCertificate,
-    token: Redacted.value(accessToken),
-  } satisfies GkeConnection;
+    token: accessToken,
+  } satisfies ClusterConnection;
 });
 
-const observe = (connection: GkeConnection, namespace: string, name: string) =>
-  getSecret(connection, namespace, name).pipe(
-    Effect.catchIf(
-      (e): e is KubernetesApiError =>
-        e instanceof KubernetesApiError && e.statusCode === 404,
-      () => Effect.succeed(undefined as SecretObject | undefined),
+/** GET a Secret, mapping a 404 (`NotFound`) to `undefined`. */
+const observe = (
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+) =>
+  readCoreV1NamespacedSecret({ namespace, name }).pipe(
+    Effect.provide(clusterLayer(connection)),
+    Effect.catchTag("NotFound", () =>
+      Effect.succeed(undefined as SecretObject | undefined),
     ),
   );
+
+/** Base64-encode the (possibly redacted) string values for the `data` field. */
+const encodeData = (
+  stringData: Record<string, Redacted.Redacted<string> | string>,
+): Record<string, string> => {
+  const data: Record<string, string> = {};
+  for (const [k, v] of Object.entries(stringData)) {
+    const raw = Redacted.isRedacted(v) ? Redacted.value(v) : v;
+    data[k] = Buffer.from(raw, "utf8").toString("base64");
+  }
+  return data;
+};
 
 export const KubernetesSecretProvider = () =>
   Provider.effect(
     KubernetesSecret,
     Effect.gen(function* () {
       return {
-        // Attributes unchanged by an in-place update (so dependents can
-        // resolve them at plan time): identity (name/namespace), the
-        // server-assigned uid, and endpoint — which is a replace trigger,
-        // so it never changes on update. caCertificate is intentionally
-        // excluded: it can rotate on the same cluster.
+        // Attributes unchanged by an in-place update (so dependents can resolve
+        // them at plan time): identity (name/namespace), the server-assigned
+        // uid, and endpoint — which is a replace trigger, so it never changes
+        // on update. caCertificate is intentionally excluded: it can rotate on
+        // the same cluster.
         stables: ["name", "namespace", "endpoint", "uid"],
         diff: Effect.fn(function* ({ id, news, olds = {} }) {
           if (!isResolved(news)) return undefined;
           const o = olds as KubernetesSecretProps;
-          // Compare the RESOLVED name and type (with their defaults
-          // applied), not the raw props — otherwise omitting `name` on one
-          // side and setting it to the generated physical name on the
-          // other (or the same for `type`/"Opaque") triggers a spurious
-          // replace.
+          // Compare the RESOLVED name and type (with their defaults applied),
+          // not the raw props — otherwise omitting `name` on one side and
+          // setting it to the generated physical name on the other (or the
+          // same for `type`/"Opaque") triggers a spurious replace.
           const defaultName = (
             yield* createPhysicalName({ id, maxLength: 63 })
           ).toLowerCase();
-          const sameName = (o.name ?? defaultName) === (news.name ?? defaultName);
+          const sameName =
+            (o.name ?? defaultName) === (news.name ?? defaultName);
           const sameType = (o.type ?? "Opaque") === (news.type ?? "Opaque");
-          // Replace (create new + delete old) rather than in-place SSA on:
-          // - `endpoint`: points at a different cluster (would orphan the
-          //   old Secret). caCertificate is excluded — it can rotate on
-          //   the same cluster and should just re-apply.
+          // Replace (create new + delete old) rather than in-place upsert on:
+          // - `endpoint`: points at a different cluster (would orphan the old
+          //   Secret). caCertificate is excluded — it can rotate on the same
+          //   cluster and should just re-apply.
           // - `namespace`/`name`: the object's identity.
-          // - `type`: immutable on a Kubernetes Secret; an in-place apply
-          //   with a new type is rejected by the API.
+          // - `type`: immutable on a Kubernetes Secret; a PUT with a new type
+          //   is rejected by the API.
           if (
             !sameName ||
             !sameType ||
@@ -201,37 +235,70 @@ export const KubernetesSecretProvider = () =>
             ...(yield* gcpInternalLabels(id)),
           };
           const connection = yield* connect(news);
+          const layer = clusterLayer(connection);
+          const data = encodeData(news.stringData);
 
-          // Unwrap any Redacted values at the last moment — Redacted is
-          // kept opaque through Output resolution, so it arrives here as
-          // a Redacted object that would JSON-serialize to "<redacted>"
-          // if passed through verbatim — then base64-encode for `data`.
-          const data: Record<string, string> = {};
-          for (const [k, v] of Object.entries(news.stringData)) {
-            const raw = Redacted.isRedacted(v) ? Redacted.value(v) : v;
-            data[k] = Buffer.from(raw, "utf8").toString("base64");
-          }
+          // Full-object PUT for an existing Secret — carries the observed
+          // resourceVersion (the API requires it for updates and uses it for
+          // optimistic concurrency).
+          const replaceFrom = (observed: SecretObject) =>
+            replaceCoreV1NamespacedSecret({
+              namespace: news.namespace,
+              name: desiredName,
+              fieldManager: "alchemy",
+              metadata: {
+                name: desiredName,
+                labels,
+                resourceVersion: observed.metadata?.resourceVersion,
+              },
+              type: desiredType,
+              data,
+            }).pipe(Effect.provide(layer));
 
-          // Server-side apply is an idempotent upsert — it both creates
-          // the Secret if missing and converges its data/labels if it
-          // exists, taking field-manager ownership (force=true).
-          const applied = yield* applySecret(connection, {
-            metadata: { name: desiredName, namespace: news.namespace, labels },
-            type: desiredType,
-            data,
-          });
+          // On a lost race / stale resourceVersion (Conflict), re-read once and
+          // replace against the fresh state.
+          const reReadThenReplace = observe(
+            connection,
+            news.namespace,
+            desiredName,
+          ).pipe(
+            Effect.flatMap((fresh) =>
+              fresh
+                ? replaceFrom(fresh)
+                : // Vanished between the conflict and the re-read — recreate.
+                  createCoreV1NamespacedSecret({
+                    namespace: news.namespace,
+                    fieldManager: "alchemy",
+                    metadata: { name: desiredName, labels },
+                    type: desiredType,
+                    data,
+                  }).pipe(Effect.provide(layer)),
+            ),
+          );
 
-          // A 2xx apply normally echoes the object, but a successful
-          // empty-body response is possible — re-read so we always return
-          // real attributes (uid/resourceVersion) rather than crash. Use
-          // getSecret (NOT observe): if the Secret is somehow absent after
-          // a successful apply, propagate the 404 and fail the reconcile
-          // instead of recording an empty success.
-          const final = applied?.metadata
-            ? applied
-            : yield* getSecret(connection, news.namespace, desiredName);
+          // Observe → ensure → sync, one flow (adoption traverses it too).
+          const observed = yield* observe(
+            connection,
+            news.namespace,
+            desiredName,
+          );
+          const result = observed
+            ? yield* replaceFrom(observed).pipe(
+                Effect.catchTag("Conflict", () => reReadThenReplace),
+              )
+            : yield* createCoreV1NamespacedSecret({
+                namespace: news.namespace,
+                fieldManager: "alchemy",
+                metadata: { name: desiredName, labels },
+                type: desiredType,
+                data,
+              }).pipe(
+                Effect.provide(layer),
+                // Lost the create race — converge by replacing what's there.
+                Effect.catchTag("Conflict", () => reReadThenReplace),
+              );
 
-          return toAttributes(final, {
+          return toAttributes(result, {
             name: desiredName,
             namespace: news.namespace,
             endpoint: news.endpoint,
@@ -241,7 +308,14 @@ export const KubernetesSecretProvider = () =>
         }),
         delete: Effect.fn(function* ({ output }) {
           const connection = yield* connect(output);
-          yield* deleteSecret(connection, output.namespace, output.name);
+          yield* deleteCoreV1NamespacedSecret({
+            namespace: output.namespace,
+            name: output.name,
+          }).pipe(
+            Effect.provide(clusterLayer(connection)),
+            // 404 is success (idempotent teardown).
+            Effect.catchTag("NotFound", () => Effect.void),
+          );
         }),
         read: Effect.fn(function* ({ id, output, olds }) {
           const endpoint = output?.endpoint ?? olds?.endpoint;

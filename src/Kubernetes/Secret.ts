@@ -265,18 +265,17 @@ export const KubernetesSecretProvider = () =>
               data,
             }).pipe(Effect.provide(layer));
 
-          // On a lost race / stale resourceVersion (Conflict), re-read once and
-          // replace against the fresh state.
-          const reReadThenReplace = observe(
+          // Observe → ensure: create if absent, else read-modify-write replace.
+          // Adoption (output defined, olds undefined) traverses the same flow.
+          const writeOnce = observe(
             connection,
             news.namespace,
             desiredName,
           ).pipe(
-            Effect.flatMap((fresh) =>
-              fresh
-                ? replaceFrom(fresh)
-                : // Vanished between the conflict and the re-read — recreate.
-                  createCoreV1NamespacedSecret({
+            Effect.flatMap((observed) =>
+              observed
+                ? replaceFrom(observed)
+                : createCoreV1NamespacedSecret({
                     namespace: news.namespace,
                     fieldManager: "alchemy",
                     metadata: { name: desiredName, labels },
@@ -286,27 +285,18 @@ export const KubernetesSecretProvider = () =>
             ),
           );
 
-          // Observe → ensure → sync, one flow (adoption traverses it too).
-          const observed = yield* observe(
-            connection,
-            news.namespace,
-            desiredName,
-          );
-          const result = observed
-            ? yield* replaceFrom(observed).pipe(
-                Effect.catchTag("Conflict", () => reReadThenReplace),
-              )
-            : yield* createCoreV1NamespacedSecret({
-                namespace: news.namespace,
-                fieldManager: "alchemy",
-                metadata: { name: desiredName, labels },
-                type: desiredType,
-                data,
-              }).pipe(
-                Effect.provide(layer),
-                // Lost the create race — converge by replacing what's there.
-                Effect.catchTag("Conflict", () => reReadThenReplace),
-              );
+          // Retry the WHOLE observe→write flow on Conflict — a stale
+          // resourceVersion (replace) or a create/delete race re-observes fresh
+          // state and writes again, so a second conflict is handled too. Bounded
+          // so a persistently-contended object fails (and the engine
+          // re-reconciles) rather than spinning forever.
+          const upsert = (attempt: number): typeof writeOnce =>
+            writeOnce.pipe(
+              Effect.catchTag("Conflict", (e) =>
+                attempt < 3 ? upsert(attempt + 1) : Effect.fail(e),
+              ),
+            );
+          const result = yield* upsert(0);
 
           return toAttributes(result, {
             name: desiredName,

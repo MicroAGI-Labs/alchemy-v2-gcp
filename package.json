@@ -54,11 +54,13 @@
   },
   "peerDependencies": {
     "@distilled.cloud/gcp": ">=0.16.9",
+    "@distilled.cloud/kubernetes": ">=0.24.9",
     "alchemy": ">=2.0.0-beta.30",
     "effect": ">=4.0.0-beta.60 || >=4.0.0"
   },
   "devDependencies": {
     "@distilled.cloud/gcp": "workspace:*",
+    "@distilled.cloud/kubernetes": "workspace:*",
     "@types/bun": "latest",
     "@types/node": "latest",
     "alchemy": "workspace:*",

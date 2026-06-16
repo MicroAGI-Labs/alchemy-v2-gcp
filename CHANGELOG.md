@@ -4,6 +4,53 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 — 2026-06-16
+
+### Added
+
+- **`GCP.KubernetesManifest`** — generic Alchemy resource for *any*
+  Kubernetes Kind/CRD, server-side-applied via
+  `Content-Type: application/apply-patch+yaml` with `fieldManager=alchemy`
+  and `force=true`. Kind → REST resource (plural + scope) resolved through
+  the apiserver's discovery endpoint, so built-ins and CRDs work without a
+  hard-coded kind→plural table. Adoption gated on the standard
+  `alchemy_app`/`alchemy_stage`/`alchemy_id` label triple.
+
+- **`clusterLayer` (`src/Kubernetes/connection.ts`)** — wires a GKE
+  cluster into the typed `@distilled.cloud/kubernetes` SDK: ADC bearer
+  token (`Credentials`) + an `HttpClient` whose `FetchHttpClient.Fetch` is
+  overridden with a `node:https` fetch that trusts the per-cluster CA.
+  The stock fetch can't verify the GKE cert (it's signed by the
+  cluster's own CA, not a public root), so the override is required.
+
+### Changed
+
+- **`GCP.KubernetesSecret` convergence** — moved off the hand-rolled
+  client onto typed `@distilled.cloud/kubernetes` core/v1 ops. Reconcile
+  is now **create + replace (PUT)** with the observed `resourceVersion`
+  for optimistic concurrency, bounded `Conflict` retry (recursive on the
+  whole observe→write flow, up to 3 re-attempts), and read-modify-write
+  metadata that preserves foreign annotations/owner references/finalizers
+  (a PUT replaces the whole object, so spreading `...observed.metadata`
+  first and overlaying only what we manage is essential — without it
+  every reconcile would strip an `ownerReference` and break garbage
+  collection). Validation scripts in `scripts/validate-k8s-{connection,
+  secret,manifest}.ts` cover live cluster runs against `research-cluster-a`.
+
+## 0.6.0 — 2026-06-14
+
+### Added
+
+- **`GCP.KubernetesSecret`** — first Kubernetes resource in the
+  provider. Opaque Secret in a GKE cluster, driven via a hand-rolled
+  REST client with ADC bearer auth + per-cluster CA trust. Adoptable via
+  the standard alchemy-internal label triple.
+
+### Changed
+
+- **`Auth/Credentials.fromAuthProvider`** — same fix as `0.5.1`,
+  re-asserted against the freshly bumped workspace pins.
+
 ## 0.5.1 — 2026-06-08
 
 ### Fixed

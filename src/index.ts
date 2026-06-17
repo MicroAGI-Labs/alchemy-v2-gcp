@@ -11,6 +11,7 @@ export * from "./ArtifactRegistry/index.ts";
 export * from "./CloudResourceManager/index.ts";
 export * from "./Compute/index.ts";
 export * from "./Container/index.ts";
+export * from "./Iam/index.ts";
 export * from "./Kubernetes/index.ts";
 export * from "./ManagedLustre/index.ts";
 export * from "./Run/index.ts";

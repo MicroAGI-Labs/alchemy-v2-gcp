@@ -24,6 +24,10 @@ import { Subnetwork, SubnetworkProvider } from "./Compute/Subnetwork.ts";
 import { Cluster, ClusterProvider } from "./Container/Cluster.ts";
 import { NodePool, NodePoolProvider } from "./Container/NodePool.ts";
 import {
+  ServiceAccount,
+  ServiceAccountProvider,
+} from "./Iam/ServiceAccount.ts";
+import {
   KubernetesManifest,
   KubernetesManifestProvider,
 } from "./Kubernetes/KubernetesManifest.ts";
@@ -89,6 +93,7 @@ export const providers = () =>
       SqlDatabase,
       SqlUser,
       ArtifactRegistryRepository,
+      ServiceAccount,
       KubernetesSecret,
       KubernetesManifest,
     ]),
@@ -115,6 +120,7 @@ export const providers = () =>
         SqlDatabaseProvider(),
         SqlUserProvider(),
         ArtifactRegistryRepositoryProvider(),
+        ServiceAccountProvider(),
         KubernetesSecretProvider(),
         KubernetesManifestProvider(),
       ),

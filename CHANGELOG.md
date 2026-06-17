@@ -4,6 +4,45 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0 — 2026-06-17
+
+### Added
+
+- **`GCP.ServiceAccount`** — Alchemy resource for managing Google
+  Cloud service accounts (GSAs). Wraps the iam-v1 API
+  (`@distilled.cloud/gcp/unstable/iam-v1` — the `iamcredentials-v1`
+  surface was already in the stable index; `iam-v1` lives under
+  `unstable/` because the auto-generated codegen hasn't been manually
+  reviewed). Adoption gated on an alchemy marker embedded in the
+  GSA's `description` field (GSAs have no labels field, so the
+  label-based pattern used by `GCP.Project` doesn't apply — see
+  `Tags.descriptionHasAlchemyMarker`). Cold recovery (state loss)
+  falls back to a project-wide scan-by-marker when persisted
+  `output`/`olds` lack the `uniqueId`. Synchronous lifecycle — no LRO
+  polling required.
+
+- **`GCP.serviceAccountIamMember`** — target-side binding helper, the
+  same shape as the existing `projectIamMember` and
+  `subnetworkIamMember`. Records a `(role, member)` grant onto the
+  GSA's binding bag; the ServiceAccount provider's `reconcile` merges
+  all bound entries by role into a single `setIamPolicy` call on the
+  GSA. Foreign bindings on the policy (non-alchemy roles, or members
+  we don't manage on the same role) are preserved verbatim. Etag
+  round-trip handles concurrent edits; `Conflict` triggers a
+  re-read + retry.
+
+### Use cases
+
+- Workload Identity bindings — `roles/iam.workloadIdentityUser` on a
+  GSA from a k8s SA. Replaces the manual `gcloud iam service-accounts
+  add-iam-policy-binding` dance that's been applied out-of-band for
+  the `research-ui` and `preview-builder` GSAs.
+- Per-namespace `roles/artifactregistry.writer` on a GSA scoped to
+  a single research pod (instead of project-wide via
+  `projectIamMember`).
+- Impersonation grants — `roles/iam.serviceAccountTokenCreator` /
+  `roles/iam.serviceAccountUser`.
+
 ## 0.7.0 — 2026-06-16
 
 ### Added

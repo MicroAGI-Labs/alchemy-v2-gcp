@@ -144,6 +144,14 @@ export type NodePoolProps = {
     gvnic?: { enabled: boolean };
     /** Confidential VM. Mutable via `update`. */
     confidentialNodes?: { enabled: boolean };
+    /**
+     * GCFS (Image Streaming) — stream container image data from Artifact
+     * Registry so containers start before the full image is pulled,
+     * cutting cold start for large images. Only accelerates images stored
+     * in Artifact Registry. Mutable via `update`. Enabling/disabling on an
+     * existing pool re-creates its nodes (rolling node recreation).
+     */
+    gcfsConfig?: { enabled: boolean };
   };
   /** Cluster autoscaler. Mutable via `setAutoscaling`. */
   autoscaling?: {
@@ -295,6 +303,7 @@ export const toNodeConfigCreateBody = (
       : {}),
     ...(config.gvnic ? { gvnic: config.gvnic } : {}),
     ...(config.confidentialNodes ? { confidentialNodes: config.confidentialNodes } : {}),
+    ...(config.gcfsConfig ? { gcfsConfig: config.gcfsConfig } : {}),
   };
 };
 
@@ -373,6 +382,9 @@ const toNodePoolUpdateBody = (
   }
   if (nc.confidentialNodes && !deepEqual(oc.confidentialNodes, nc.confidentialNodes)) {
     body.confidentialNodes = nc.confidentialNodes;
+  }
+  if (nc.gcfsConfig && !deepEqual(oc.gcfsConfig, nc.gcfsConfig)) {
+    body.gcfsConfig = nc.gcfsConfig;
   }
   if (
     nc.workloadMetadataConfig &&

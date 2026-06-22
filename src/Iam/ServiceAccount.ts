@@ -321,9 +321,28 @@ export const ServiceAccountProvider = () =>
         stables: ["accountId", "projectId", "uniqueId", "name", "email"],
         diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
+          // Replace ONLY when a prior identity is actually known AND differs.
+          // A partial/adopted state can lack the persisted accountId/projectId
+          // (an adoption that never persisted full Attributes leaves
+          // output.projectId === "" / undefined). Treating that "unknown" as a
+          // replace spuriously deletes+recreates a live, correctly-named GSA
+          // (and churns its uniqueId → breaks Workload-Identity bindings).
+          // When the prior identity is absent, fall through to reconcile, which
+          // observes the live resource and re-persists its Attributes. The
+          // truthiness guard covers both `undefined` and the `""` toAttributes
+          // default; a genuine accountId/project change still has a non-empty
+          // prior value to compare against, so real replacements are unaffected.
+          // `||` (not `??`): toAttributes persists `accountId`/`projectId` as
+          // `""` when absent, and an empty string must fall through to `olds`
+          // (the previous Props) rather than mask it — otherwise a genuine
+          // identity change with an empty `output` but a populated `olds` would
+          // skip the replace and adopt/create at the new identity without
+          // deleting the old GSA.
+          const priorAccount = output?.accountId || olds.accountId;
+          const priorProject = output?.projectId || olds.project;
           if (
-            news.accountId !== (output?.accountId ?? olds.accountId) ||
-            news.project !== (output?.projectId ?? olds.project)
+            (priorAccount && news.accountId !== priorAccount) ||
+            (priorProject && news.project !== priorProject)
           ) {
             return { action: "replace" } as const;
           }

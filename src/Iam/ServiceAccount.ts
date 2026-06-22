@@ -332,8 +332,14 @@ export const ServiceAccountProvider = () =>
           // truthiness guard covers both `undefined` and the `""` toAttributes
           // default; a genuine accountId/project change still has a non-empty
           // prior value to compare against, so real replacements are unaffected.
-          const priorAccount = output?.accountId ?? olds.accountId;
-          const priorProject = output?.projectId ?? olds.project;
+          // `||` (not `??`): toAttributes persists `accountId`/`projectId` as
+          // `""` when absent, and an empty string must fall through to `olds`
+          // (the previous Props) rather than mask it — otherwise a genuine
+          // identity change with an empty `output` but a populated `olds` would
+          // skip the replace and adopt/create at the new identity without
+          // deleting the old GSA.
+          const priorAccount = output?.accountId || olds.accountId;
+          const priorProject = output?.projectId || olds.project;
           if (
             (priorAccount && news.accountId !== priorAccount) ||
             (priorProject && news.project !== priorProject)

@@ -28,6 +28,10 @@ import {
   ServiceAccountProvider,
 } from "./Iam/ServiceAccount.ts";
 import {
+  ServiceAccountKey,
+  ServiceAccountKeyProvider,
+} from "./Iam/ServiceAccountKey.ts";
+import {
   KubernetesManifest,
   KubernetesManifestProvider,
 } from "./Kubernetes/KubernetesManifest.ts";
@@ -45,6 +49,10 @@ import {
   PsaConnection,
   PsaConnectionProvider,
 } from "./ServiceNetworking/PsaConnection.ts";
+import {
+  StorageBucket,
+  StorageBucketProvider,
+} from "./Storage/Bucket.ts";
 import { ApiEnable, ApiEnableProvider } from "./ServiceUsage/ApiEnable.ts";
 import { SqlDatabase, SqlDatabaseProvider } from "./Sqladmin/Database.ts";
 import { SqlInstance, SqlInstanceProvider } from "./Sqladmin/Instance.ts";
@@ -87,6 +95,7 @@ export const providers = () =>
       SharedVpcServiceProject,
       PsaConnection,
       ManagedLustreInstance,
+      StorageBucket,
       Service,
       Job,
       SqlInstance,
@@ -94,6 +103,7 @@ export const providers = () =>
       SqlUser,
       ArtifactRegistryRepository,
       ServiceAccount,
+      ServiceAccountKey,
       KubernetesSecret,
       KubernetesManifest,
     ]),
@@ -114,6 +124,7 @@ export const providers = () =>
         SharedVpcServiceProjectProvider(),
         PsaConnectionProvider(),
         ManagedLustreInstanceProvider(),
+        StorageBucketProvider(),
         ServiceProvider(),
         JobProvider(),
         SqlInstanceProvider(),
@@ -121,6 +132,7 @@ export const providers = () =>
         SqlUserProvider(),
         ArtifactRegistryRepositoryProvider(),
         ServiceAccountProvider(),
+        ServiceAccountKeyProvider(),
         KubernetesSecretProvider(),
         KubernetesManifestProvider(),
       ),

@@ -185,9 +185,15 @@ export const ServiceAccountKeyProvider = () =>
             return toAttributes(created);
           }
 
-          // Key exists. If we have privateKeyData in state, preserve it.
-          if (output?.privateKeyData) {
-            return { ...toAttributes(observed), privateKeyData: output.privateKeyData };
+          // Key exists. If it is the same key we created before, preserve
+          // privateKeyData from state. If the name differs, the key was
+          // swapped out-of-band — fall through to delete + recreate so
+          // privateKeyData matches the live key.
+          if (output?.privateKeyData && observed.name === output.name) {
+            return {
+              ...toAttributes(observed),
+              privateKeyData: output.privateKeyData,
+            };
           }
 
           // Key exists but privateKeyData is missing from state (state
@@ -227,12 +233,16 @@ export const ServiceAccountKeyProvider = () =>
           }
           if (!observed) return undefined;
 
-          // privateKeyData is not available from get/list — preserve
-          // from state output. The stables array ensures the engine
-          // doesn't diff it.
+          // privateKeyData is not available from get/list — preserve it
+          // from state output only when it still describes this key.
+          const privateKeyData =
+            output?.name && observed.name === output.name
+              ? output.privateKeyData
+              : undefined;
+
           return {
             ...toAttributes(observed),
-            privateKeyData: output?.privateKeyData,
+            privateKeyData,
           };
         }),
       };

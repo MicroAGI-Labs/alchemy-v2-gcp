@@ -323,9 +323,10 @@ export const StorageBucketProvider = () =>
           }
           return undefined;
         }),
-        reconcile: Effect.fn(function* ({ id, news, bindings }) {
+        reconcile: Effect.fn(function* ({ id, news, bindings, output }) {
           const internalLabels = yield* gcpInternalLabels(id);
           const mergedLabels = { ...(news.labels ?? {}), ...internalLabels };
+          let created = false;
 
           // 1. Observe — cloud state is authoritative. Fall back to
           //    label-scan for cold recovery.
@@ -357,10 +358,36 @@ export const StorageBucketProvider = () =>
                 Effect.succeed(undefined as storage.Bucket | undefined),
               ),
             );
+            created = !!observed;
 
             if (!observed) {
               observed = yield* requireBucket(news.name, "did not appear after create");
             }
+          }
+
+          // Refuse to mutate an existing unowned bucket on greenfield
+          // create. The `read` handler returns Unowned(attrs) for
+          // buckets without our labels, which gates adoption behind
+          // --adopt. But reconcile runs before read on a first deploy,
+          // so without this guard we'd sync mutable fields (labels,
+          // lifecycle, UBLA) on a foreign bucket — bypassing the
+          // adoption gate. Skip the check when we just created the
+          // bucket (it has our labels) or when the engine already
+          // adopted it (output is defined).
+          if (
+            !created &&
+            !output &&
+            !(yield* hasAlchemyLabels(
+              id,
+              observed.labels as Record<string, string> | undefined,
+            ))
+          ) {
+            return yield* Effect.fail(
+              new ConfigError({
+                message:
+                  `Bucket ${news.name} already exists without matching alchemy labels; use --adopt to take it over.`,
+              }),
+            );
           }
 
           // 3. Sync mutable fields against OBSERVED state.

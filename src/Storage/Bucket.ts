@@ -315,9 +315,11 @@ export const StorageBucketProvider = () =>
           if (!isResolved(news)) return undefined;
           const priorName = output?.name || olds.name;
           const priorProject = olds.project;
+          const priorLocation = olds.location;
           if (
             (priorName && news.name !== priorName) ||
-            (priorProject && news.project !== priorProject)
+            (priorProject && news.project !== priorProject) ||
+            (priorLocation && news.location !== priorLocation)
           ) {
             return { action: "replace" } as const;
           }

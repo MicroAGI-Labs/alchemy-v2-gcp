@@ -134,12 +134,18 @@ export const ServiceAccountKeyProvider = () =>
         });
         const keys = page.keys ?? [];
         if (keys.length === 0) return undefined;
-        // If there's exactly one user-managed key, adopt it.
-        // If there are multiple, we can't determine which is ours —
-        // return undefined so the engine plans a create (which will
-        // Conflict, and the user must manually clean up).
         if (keys.length === 1) return keys[0];
-        return undefined;
+        // Multiple user-managed keys — GCP allows multiple keys per
+        // SA, so creating another would silently succeed (not
+        // Conflict as an earlier comment assumed). Surface an error
+        // so the user cleans up the extra keys and re-runs.
+        return yield* Effect.fail(
+          new ConfigError({
+            message:
+              `Service account ${serviceAccount} has ${keys.length} user-managed keys; ` +
+              `cannot determine which to adopt. Delete the extra keys and re-run.`,
+          }),
+        );
       });
 
       return {
@@ -150,7 +156,18 @@ export const ServiceAccountKeyProvider = () =>
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
           const priorSa = olds.serviceAccount as string | undefined;
-          if (priorSa && news.serviceAccount !== priorSa) {
+          const priorKeyAlgorithm = olds.keyAlgorithm as
+            | string
+            | undefined;
+          const priorPrivateKeyType = olds.privateKeyType as
+            | string
+            | undefined;
+          if (
+            (priorSa && news.serviceAccount !== priorSa) ||
+            (priorKeyAlgorithm && news.keyAlgorithm !== priorKeyAlgorithm) ||
+            (priorPrivateKeyType &&
+              news.privateKeyType !== priorPrivateKeyType)
+          ) {
             return { action: "replace" } as const;
           }
           return undefined;

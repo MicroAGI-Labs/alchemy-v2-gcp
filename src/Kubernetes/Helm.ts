@@ -305,9 +305,9 @@ export const HelmReleaseProvider = () =>
 
       return {
         // Identity (name/namespace/chart) and endpoint are unchanged by an
-        // in-place upgrade. revision increments on every upgrade but the
-        // resource is the same, so it's stable too.
-        stables: ["name", "namespace", "chart", "endpoint", "revision"],
+        // in-place upgrade. revision increments on every upgrade — it is NOT
+        // stable (an update must persist the new revision).
+        stables: ["name", "namespace", "chart", "endpoint"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
           const o = olds as HelmReleaseProps;
@@ -343,7 +343,7 @@ export const HelmReleaseProvider = () =>
                   "--force-update",
                 ],
               });
-              yield* runHelm({
+              yield* runHelmOrFail({
                 kubeconfigPath,
                 helmArgs: ["repo", "update"],
               });
@@ -359,10 +359,14 @@ export const HelmReleaseProvider = () =>
               .join(",");
 
             // helm upgrade --install is idempotent for both first install
-            // and subsequent upgrades.
+            // and subsequent upgrades. --reset-values makes the declared
+            // `values` authoritative: if a key is removed from `values`,
+            // the next upgrade reverts it to the chart default rather than
+            // silently retaining the prior release's value.
             const helmArgs = [
               "upgrade",
               "--install",
+              "--reset-values",
               news.name,
               news.chart,
               "--namespace",

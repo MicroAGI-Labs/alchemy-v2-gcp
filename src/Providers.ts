@@ -32,6 +32,10 @@ import {
   ServiceAccountKeyProvider,
 } from "./Iam/ServiceAccountKey.ts";
 import {
+  HelmRelease,
+  HelmReleaseProvider,
+} from "./Kubernetes/Helm.ts";
+import {
   KubernetesManifest,
   KubernetesManifestProvider,
 } from "./Kubernetes/KubernetesManifest.ts";
@@ -106,6 +110,7 @@ export const providers = () =>
       ServiceAccountKey,
       KubernetesSecret,
       KubernetesManifest,
+      HelmRelease,
     ]),
   ).pipe(
     Layer.provide(
@@ -135,6 +140,7 @@ export const providers = () =>
         ServiceAccountKeyProvider(),
         KubernetesSecretProvider(),
         KubernetesManifestProvider(),
+        HelmReleaseProvider(),
       ),
     ),
     Layer.provideMerge(fromAuthProvider()),

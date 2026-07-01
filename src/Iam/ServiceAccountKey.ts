@@ -131,7 +131,7 @@ export const ServiceAccountKeyProvider = () =>
       ) {
         const page = yield* listProjectsServiceAccountsKeys({
           name: serviceAccount,
-          keyTypes: "USER_MANAGED",
+          keyTypes: ["USER_MANAGED"],
         });
         const keys = page.keys ?? [];
         if (keys.length === 0) return undefined;

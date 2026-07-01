@@ -18,4 +18,5 @@ export * from "./Run/index.ts";
 export * from "./ServiceNetworking/index.ts";
 export * from "./Sqladmin/index.ts";
 export * from "./ServiceUsage/index.ts";
+export * from "./Storage/index.ts";
 export * from "./Providers.ts";

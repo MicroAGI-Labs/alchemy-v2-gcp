@@ -205,72 +205,93 @@ export const HelmReleaseProvider = () =>
 
       /**
        * Write a temp kubeconfig (and optional values file) to a temp dir,
-       * returning the paths. The caller is responsible for cleanup via
-       * `Effect.acquireRelease` or `finally`.
+       * returning the paths. The temp dir is tied to a Scope via
+       * `acquireRelease` — if any step after `makeTempDirectory` fails, the
+       * dir (which contains the sensitive kubeconfig with an ADC bearer
+       * token) is removed immediately. Callers wrap their body in
+       * `Effect.scoped` so the dir also cleans up on success/interruption.
        */
-      const prepare = Effect.fn("helm.prepare")(function* (props: {
+      const prepare = (props: {
         endpoint: string;
         caCertificate: string;
         values?: Record<string, unknown>;
-      }) {
-        const connection = yield* connect(props);
-        const dir = yield* fs.makeTempDirectory({ prefix: "helm-alchemy-" });
-        const kubeconfigPath = path.join(dir, "kubeconfig.json");
-        const valuesPath = props.values
-          ? path.join(dir, "values.json")
-          : undefined;
+      }) =>
+        Effect.acquireRelease(
+          Effect.gen(function* () {
+            const connection = yield* connect(props);
+            const dir = yield* fs.makeTempDirectory({
+              prefix: "helm-alchemy-",
+            });
+            const kubeconfigPath = path.join(dir, "kubeconfig.json");
+            const valuesPath = props.values
+              ? path.join(dir, "values.json")
+              : undefined;
 
-        // Kubeconfig with the cluster's CA + the ADC bearer token. The CA
-        // is already base64-encoded (as GKE returns it), so it goes straight
-        // into `certificate-authority-data`.
-        const kubeconfig = JSON.stringify({
-          apiVersion: "v1",
-          kind: "Config",
-          clusters: [
-            {
-              name: "gke",
-              cluster: {
-                "certificate-authority-data": props.caCertificate,
-                server: `https://${props.endpoint}`,
-              },
-            },
-          ],
-          contexts: [
-            {
-              name: "gke",
-              context: { cluster: "gke", user: "gke-user" },
-            },
-          ],
-          "current-context": "gke",
-          users: [
-            {
-              name: "gke-user",
-              user: { token: connection.token },
-            },
-          ],
-        });
-        yield* fs.writeFileString(kubeconfigPath, kubeconfig);
+            // Kubeconfig with the cluster's CA + the ADC bearer token. The CA
+            // is already base64-encoded (as GKE returns it), so it goes
+            // straight into `certificate-authority-data`.
+            const kubeconfig = JSON.stringify({
+              apiVersion: "v1",
+              kind: "Config",
+              clusters: [
+                {
+                  name: "gke",
+                  cluster: {
+                    "certificate-authority-data": props.caCertificate,
+                    server: `https://${props.endpoint}`,
+                  },
+                },
+              ],
+              contexts: [
+                {
+                  name: "gke",
+                  context: { cluster: "gke", user: "gke-user" },
+                },
+              ],
+              "current-context": "gke",
+              users: [
+                {
+                  name: "gke-user",
+                  user: { token: connection.token },
+                },
+              ],
+            });
+            yield* fs.writeFileString(kubeconfigPath, kubeconfig);
 
-        if (valuesPath && props.values) {
-          // JSON is valid YAML — helm accepts it for --values.
-          yield* fs.writeFileString(valuesPath, JSON.stringify(props.values));
-        }
+            if (valuesPath && props.values) {
+              // JSON is valid YAML — helm accepts it for --values.
+              yield* fs.writeFileString(valuesPath, JSON.stringify(props.values));
+            }
 
-        return { dir, kubeconfigPath, valuesPath, connection };
-      });
+            return { dir, kubeconfigPath, valuesPath, connection };
+          }),
+          // Release: always remove the temp dir, even on success.
+          ({ dir }) => fs.remove(dir, { recursive: true }).pipe(Effect.ignore),
+        );
 
       /**
-       * Run a `helm` command with `KUBECONFIG` pointing at the temp file.
-       * Returns stdout/stderr/exitCode. Scoped so the child process is
-       * cleaned up even on interruption.
+       * Run a `helm` command with `KUBECONFIG` pointing at the temp file and
+       * `HELM_CONFIG_HOME`/`HELM_CACHE_HOME` isolated to the temp dir so
+       * `helm repo add`/`helm repo update` don't mutate the user's global
+       * Helm config. Returns stdout/stderr/exitCode. Scoped so the child
+       * process is cleaned up even on interruption.
        */
       const runHelm = Effect.fn("helm.run")(function* (args: {
         kubeconfigPath: string;
+        dir: string;
         helmArgs: string[];
       }) {
         const cmd = ChildProcess.make("helm", args.helmArgs, {
           shell: false,
-          env: { ...process.env, KUBECONFIG: args.kubeconfigPath },
+          env: {
+            ...process.env,
+            KUBECONFIG: args.kubeconfigPath,
+            // Isolate helm config/cache to the temp dir so parallel
+            // reconciles or CI jobs don't race on the shared repository
+            // index (~/.config/helm/repositories.yaml).
+            HELM_CONFIG_HOME: args.dir,
+            HELM_CACHE_HOME: args.dir,
+          },
         });
         const handle = yield* cmd;
         const [exitCode, stdout, stderr] = yield* Effect.all(
@@ -287,6 +308,7 @@ export const HelmReleaseProvider = () =>
       /** Run a helm command, mapping a non-zero exit to a HelmError. */
       const runHelmOrFail = Effect.fn("helm.runOrFail")(function* (args: {
         kubeconfigPath: string;
+        dir: string;
         helmArgs: string[];
       }) {
         const result = yield* runHelm(args);
@@ -326,119 +348,126 @@ export const HelmReleaseProvider = () =>
           return undefined;
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
-          const { dir, kubeconfigPath, valuesPath } = yield* prepare(news);
+          return yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { dir, kubeconfigPath, valuesPath } = yield* prepare(news);
 
-          try {
-            // Add helm repo if needed (non-OCI charts with repoUrl).
-            if (news.repoUrl && !news.chart.startsWith("oci://")) {
-              const repoName = news.chart.split("/")[0];
-              yield* session.note(`Adding helm repo: ${repoName}`);
-              yield* runHelmOrFail({
-                kubeconfigPath,
-                helmArgs: [
-                  "repo",
-                  "add",
-                  repoName,
-                  news.repoUrl,
-                  "--force-update",
-                ],
-              });
-              yield* runHelmOrFail({
-                kubeconfigPath,
-                helmArgs: ["repo", "update"],
-              });
-            }
+              // Add helm repo if needed (non-OCI charts with repoUrl).
+              if (news.repoUrl && !news.chart.startsWith("oci://")) {
+                const repoName = news.chart.split("/")[0];
+                yield* session.note(`Adding helm repo: ${repoName}`);
+                yield* runHelmOrFail({
+                  dir,
+                  kubeconfigPath,
+                  helmArgs: [
+                    "repo",
+                    "add",
+                    repoName,
+                    news.repoUrl,
+                    "--force-update",
+                  ],
+                });
+                yield* runHelmOrFail({
+                  dir,
+                  kubeconfigPath,
+                  helmArgs: ["repo", "update"],
+                });
+              }
 
-            // Build alchemy ownership labels.
-            const labels = {
-              ...(news.labels ?? {}),
-              ...(yield* gcpInternalLabels(id)),
-            };
-            const labelsFlag = Object.entries(labels)
-              .map(([k, v]) => `${k}=${v}`)
-              .join(",");
+              // Build alchemy ownership labels.
+              const labels = {
+                ...(news.labels ?? {}),
+                ...(yield* gcpInternalLabels(id)),
+              };
+              const labelsFlag = Object.entries(labels)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(",");
 
-            // helm upgrade --install is idempotent for both first install
-            // and subsequent upgrades. --reset-values makes the declared
-            // `values` authoritative: if a key is removed from `values`,
-            // the next upgrade reverts it to the chart default rather than
-            // silently retaining the prior release's value.
-            const helmArgs = [
-              "upgrade",
-              "--install",
-              "--reset-values",
-              news.name,
-              news.chart,
-              "--namespace",
-              news.namespace,
-              ...(news.createNamespace ? ["--create-namespace"] : []),
-              ...(news.version ? ["--version", news.version] : []),
-              ...(valuesPath ? ["--values", valuesPath] : []),
-              ...(labelsFlag ? ["--labels", labelsFlag] : []),
-              ...(news.wait
-                ? ["--wait", "--atomic", "--timeout", news.timeout ?? "5m"]
-                : []),
-            ];
-
-            yield* session.note(
-              `Running helm upgrade --install ${news.name} ${news.chart}`,
-            );
-            yield* runHelmOrFail({ kubeconfigPath, helmArgs });
-
-            // Read the release status to return fresh attributes.
-            const statusResult = yield* runHelmOrFail({
-              kubeconfigPath,
-              helmArgs: [
-                "status",
+              // helm upgrade --install is idempotent for both first install
+              // and subsequent upgrades. --reset-values makes the declared
+              // `values` authoritative: if a key is removed from `values`,
+              // the next upgrade reverts it to the chart default rather than
+              // silently retaining the prior release's value.
+              const helmArgs = [
+                "upgrade",
+                "--install",
+                "--reset-values",
                 news.name,
+                news.chart,
                 "--namespace",
                 news.namespace,
-                "-o",
-                "json",
-              ],
-            });
-            const status = JSON.parse(
-              statusResult.stdout,
-            ) as HelmReleaseStatus;
+                ...(news.createNamespace ? ["--create-namespace"] : []),
+                ...(news.version ? ["--version", news.version] : []),
+                ...(valuesPath ? ["--values", valuesPath] : []),
+                ...(labelsFlag ? ["--labels", labelsFlag] : []),
+                ...(news.wait
+                  ? ["--wait", "--atomic", "--timeout", news.timeout ?? "5m"]
+                  : []),
+              ];
 
-            return toAttributes(status, {
-              name: news.name,
-              namespace: news.namespace,
-              chart: news.chart,
-              endpoint: news.endpoint,
-              caCertificate: news.caCertificate,
-            });
-          } finally {
-            yield* fs.remove(dir, { recursive: true }).pipe(Effect.ignore);
-          }
+              yield* session.note(
+                `Running helm upgrade --install ${news.name} ${news.chart}`,
+              );
+              yield* runHelmOrFail({ dir, kubeconfigPath, helmArgs });
+
+              // Read the release status to return fresh attributes.
+              const statusResult = yield* runHelmOrFail({
+                dir,
+                kubeconfigPath,
+                helmArgs: [
+                  "status",
+                  news.name,
+                  "--namespace",
+                  news.namespace,
+                  "-o",
+                  "json",
+                ],
+              });
+              const status = JSON.parse(
+                statusResult.stdout,
+              ) as HelmReleaseStatus;
+
+              return toAttributes(status, {
+                name: news.name,
+                namespace: news.namespace,
+                chart: news.chart,
+                endpoint: news.endpoint,
+                caCertificate: news.caCertificate,
+              });
+            }),
+          );
         }),
         delete: Effect.fn(function* ({ output }) {
-          const { dir, kubeconfigPath } = yield* prepare(output);
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { dir, kubeconfigPath } = yield* prepare(output);
 
-          try {
-            const result = yield* runHelm({
-              kubeconfigPath,
-              helmArgs: [
-                "uninstall",
-                output.name,
-                "--namespace",
-                output.namespace,
-              ],
-            });
-            // "release: not found" is success (idempotent teardown).
-            if (result.exitCode !== 0 && !/not found/i.test(result.stderr)) {
-              return yield* Effect.fail(
-                new HelmError({
-                  command: `helm uninstall ${output.name}`,
-                  exitCode: result.exitCode,
-                  stderr: result.stderr,
-                  stdout: result.stdout,
-                }),
-              );
-            }
-          } finally {
-            yield* fs.remove(dir, { recursive: true }).pipe(Effect.ignore);
-          }
+              const result = yield* runHelm({
+                dir,
+                kubeconfigPath,
+                helmArgs: [
+                  "uninstall",
+                  output.name,
+                  "--namespace",
+                  output.namespace,
+                ],
+              });
+              // "release: not found" is success (idempotent teardown).
+              if (
+                result.exitCode !== 0 &&
+                !/not found/i.test(result.stderr)
+              ) {
+                return yield* Effect.fail(
+                  new HelmError({
+                    command: `helm uninstall ${output.name}`,
+                    exitCode: result.exitCode,
+                    stderr: result.stderr,
+                    stdout: result.stdout,
+                  }),
+                );
+              }
+            }),
+          );
         }),
         read: Effect.fn(function* ({ id, output, olds }) {
           const endpoint = output?.endpoint ?? olds?.endpoint;
@@ -450,53 +479,57 @@ export const HelmReleaseProvider = () =>
             return undefined;
           }
 
-          const { dir, kubeconfigPath } = yield* prepare({
-            endpoint,
-            caCertificate,
-          });
+          return yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { dir, kubeconfigPath } = yield* prepare({
+                endpoint,
+                caCertificate,
+              });
 
-          try {
-            const result = yield* runHelm({
-              kubeconfigPath,
-              helmArgs: [
-                "status",
+              const result = yield* runHelm({
+                dir,
+                kubeconfigPath,
+                helmArgs: [
+                  "status",
+                  name,
+                  "--namespace",
+                  namespace,
+                  "-o",
+                  "json",
+                ],
+              });
+
+              // Release not found → absent.
+              if (
+                result.exitCode !== 0 &&
+                /not found/i.test(result.stderr)
+              ) {
+                return undefined;
+              }
+              if (result.exitCode !== 0) {
+                return yield* Effect.fail(
+                  new HelmError({
+                    command: `helm status ${name}`,
+                    exitCode: result.exitCode,
+                    stderr: result.stderr,
+                    stdout: result.stdout,
+                  }),
+                );
+              }
+
+              const status = JSON.parse(result.stdout) as HelmReleaseStatus;
+              const attrs = toAttributes(status, {
                 name,
-                "--namespace",
                 namespace,
-                "-o",
-                "json",
-              ],
-            });
-
-            // Release not found → absent.
-            if (result.exitCode !== 0 && /not found/i.test(result.stderr)) {
-              return undefined;
-            }
-            if (result.exitCode !== 0) {
-              return yield* Effect.fail(
-                new HelmError({
-                  command: `helm status ${name}`,
-                  exitCode: result.exitCode,
-                  stderr: result.stderr,
-                  stdout: result.stdout,
-                }),
-              );
-            }
-
-            const status = JSON.parse(result.stdout) as HelmReleaseStatus;
-            const attrs = toAttributes(status, {
-              name,
-              namespace,
-              chart,
-              endpoint,
-              caCertificate,
-            });
-            return (yield* hasAlchemyLabels(id, status.labels))
-              ? attrs
-              : Unowned(attrs);
-          } finally {
-            yield* fs.remove(dir, { recursive: true }).pipe(Effect.ignore);
-          }
+                chart,
+                endpoint,
+                caCertificate,
+              });
+              return (yield* hasAlchemyLabels(id, status.labels))
+                ? attrs
+                : Unowned(attrs);
+            }),
+          );
         }),
       };
     }),

@@ -108,15 +108,16 @@ export const ServiceAccountKeyProvider = () =>
         yield* iam.getProjectsServiceAccountsKeys;
 
       // Find a user-managed key by name (direct probe).
+      // NotFound → undefined (key doesn't exist). Forbidden is NOT
+      // swallowed — if the caller lacks permission to read this key,
+      // propagating the error is safer than treating it as "missing"
+      // and potentially creating a duplicate on the SA.
       const observeKey = (keyName: string) =>
         getProjectsServiceAccountsKeys({
           name: keyName,
           publicKeyType: "TYPE_GOOGLE_CREDENTIALS_FILE",
         }).pipe(
           Effect.catchTag("NotFound", () =>
-            Effect.succeed(undefined as iam.ServiceAccountKey | undefined),
-          ),
-          Effect.catchTag("Forbidden", () =>
             Effect.succeed(undefined as iam.ServiceAccountKey | undefined),
           ),
         );

@@ -43,7 +43,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsgo -p tsconfig.build.json",
     "clean": "rm -rf lib",
     "test": "CI=1 bun test",
     "test:watch": "CI=1 bun test --watch",

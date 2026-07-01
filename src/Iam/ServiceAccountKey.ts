@@ -214,21 +214,37 @@ export const ServiceAccountKeyProvider = () =>
             };
           }
 
-          // Key exists but privateKeyData is missing from state (state
-          // loss). Delete the old key and create a new one.
-          yield* deleteProjectsServiceAccountsKeys({
-            name: observed.name!,
-          }).pipe(Effect.catchTag("NotFound", () => Effect.void));
+          // privateKeyData is missing from state. Only delete + recreate
+          // when we can PROVE the observed key is ours: output.name must
+          // be set and match. SA keys carry no labels, so on cold recovery
+          // (output undefined) a found key might be pre-existing or
+          // manually rotated — deleting it would destroy someone else's
+          // credentials. Fail instead and ask the user to clean up.
+          if (output?.name && observed.name === output.name) {
+            yield* deleteProjectsServiceAccountsKeys({
+              name: observed.name!,
+            }).pipe(Effect.catchTag("NotFound", () => Effect.void));
 
-          const created = yield* createProjectsServiceAccountsKeys({
-            name: news.serviceAccount,
-            body: {
-              privateKeyType:
-                news.privateKeyType ?? "TYPE_GOOGLE_CREDENTIALS_FILE",
-              keyAlgorithm: news.keyAlgorithm ?? "KEY_ALG_RSA_2048",
-            },
-          });
-          return toAttributes(created);
+            const created = yield* createProjectsServiceAccountsKeys({
+              name: news.serviceAccount,
+              body: {
+                privateKeyType:
+                  news.privateKeyType ?? "TYPE_GOOGLE_CREDENTIALS_FILE",
+                keyAlgorithm: news.keyAlgorithm ?? "KEY_ALG_RSA_2048",
+              },
+            });
+            return toAttributes(created);
+          }
+
+          // Key exists but we can't prove ownership. Don't delete it.
+          return yield* Effect.fail(
+            new ConfigError({
+              message:
+                `Service account key ${observed.name} exists on ${news.serviceAccount} ` +
+                `but cannot be verified as ours (no matching state). ` +
+                `Delete it manually and re-run to create a fresh key.`,
+            }),
+          );
         }),
         delete: Effect.fn(function* ({ output }) {
           yield* deleteProjectsServiceAccountsKeys({

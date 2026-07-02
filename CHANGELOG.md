@@ -4,6 +4,34 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0 — 2026-07-02
+
+### Added
+
+- **`GCP.StorageBucketIamMember`** — standalone resource managing a
+  single `(bucket, role, member)` IAM entry on an **existing** GCS
+  bucket by raw name (a bucket the stack does not create, adopt, or
+  delete). Unlike the `storageBucketIamMember` binding helper — which
+  requires a stack-owned `StorageBucket` target and is additive-only —
+  this resource **revokes the member on delete** (dropping the binding
+  if emptied), so grants disappear when the declaring resource leaves
+  the stack. Member-scoped read-modify-write preserves all foreign
+  roles/members verbatim; the get→set cycle retries with backoff for
+  etag races; a missing bucket fails fast as `ConfigError`. `diff`
+  replaces on any change to the triple (persisted `output` checked
+  first, `||`-fallback so empty persisted fields are never treated as
+  a prior identity); `read` reports member absence as drift so the
+  engine re-grants. First consumer: research-infra's collab-reconciler
+  per-group bucket read grants.
+
+## 0.9.0 — 2026-06-30
+
+### Added
+
+- **`GCP.HelmRelease`** — Alchemy resource for managing Helm chart
+  releases on GKE clusters (#8). _(Entry backfilled — 0.9.0 shipped
+  without a changelog entry.)_
+
 ## 0.8.0 — 2026-06-17
 
 ### Added

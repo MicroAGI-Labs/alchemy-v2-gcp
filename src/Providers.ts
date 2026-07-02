@@ -57,6 +57,10 @@ import {
   StorageBucket,
   StorageBucketProvider,
 } from "./Storage/Bucket.ts";
+import {
+  StorageBucketIamMember,
+  StorageBucketIamMemberProvider,
+} from "./Storage/StorageBucketIamMember.ts";
 import { ApiEnable, ApiEnableProvider } from "./ServiceUsage/ApiEnable.ts";
 import { SqlDatabase, SqlDatabaseProvider } from "./Sqladmin/Database.ts";
 import { SqlInstance, SqlInstanceProvider } from "./Sqladmin/Instance.ts";
@@ -100,6 +104,7 @@ export const providers = () =>
       PsaConnection,
       ManagedLustreInstance,
       StorageBucket,
+      StorageBucketIamMember,
       Service,
       Job,
       SqlInstance,
@@ -130,6 +135,7 @@ export const providers = () =>
         PsaConnectionProvider(),
         ManagedLustreInstanceProvider(),
         StorageBucketProvider(),
+        StorageBucketIamMemberProvider(),
         ServiceProvider(),
         JobProvider(),
         SqlInstanceProvider(),

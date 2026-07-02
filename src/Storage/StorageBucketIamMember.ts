@@ -120,16 +120,20 @@ export const StorageBucketIamMemberProvider = () =>
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
           // Prior identity from persisted attributes first, then olds —
-          // mirrors Bucket.ts. If only `output` survives (e.g. props were
-          // lost), a changed triple must still replace, or the old member
-          // is never revoked.
-          const priorBucket = output?.bucket ?? olds.bucket;
-          const priorRole = output?.role ?? olds.role;
-          const priorMember = output?.member ?? olds.member;
+          // mirrors Bucket.ts (`output?.name || olds.name`). `||`, not
+          // `??`: an empty string in a partially-persisted attribute is
+          // NOT a prior identity — treating it as one would force a
+          // spurious replace whose delete targets the wrong (empty)
+          // identity. If only `output` survives (e.g. props were lost),
+          // a changed triple must still replace, or the old member is
+          // never revoked.
+          const priorBucket = output?.bucket || olds.bucket;
+          const priorRole = output?.role || olds.role;
+          const priorMember = output?.member || olds.member;
           if (
-            (priorBucket !== undefined && priorBucket !== news.bucket) ||
-            (priorRole !== undefined && priorRole !== news.role) ||
-            (priorMember !== undefined && priorMember !== news.member)
+            (priorBucket && priorBucket !== news.bucket) ||
+            (priorRole && priorRole !== news.role) ||
+            (priorMember && priorMember !== news.member)
           ) {
             return { action: "replace" } as const;
           }
@@ -173,6 +177,9 @@ export const StorageBucketIamMemberProvider = () =>
           return { bucket: news.bucket, role: news.role, member: news.member };
         }),
         delete: Effect.fn(function* ({ output }) {
+          // Partially-persisted attributes (empty fields) name no real
+          // grant — nothing to revoke, and getIamPolicy("") would 4xx.
+          if (!output.bucket || !output.role || !output.member) return;
           yield* etagRetry(
             Effect.gen(function* () {
               const current = yield* getIamPolicyBuckets({

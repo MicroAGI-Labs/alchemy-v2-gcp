@@ -117,12 +117,19 @@ export const StorageBucketIamMemberProvider = () =>
       return {
         // Identity IS the triple; all three are static strings.
         stables: ["bucket", "role", "member"],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
+          // Prior identity from persisted attributes first, then olds —
+          // mirrors Bucket.ts. If only `output` survives (e.g. props were
+          // lost), a changed triple must still replace, or the old member
+          // is never revoked.
+          const priorBucket = output?.bucket ?? olds.bucket;
+          const priorRole = output?.role ?? olds.role;
+          const priorMember = output?.member ?? olds.member;
           if (
-            (olds.bucket !== undefined && olds.bucket !== news.bucket) ||
-            (olds.role !== undefined && olds.role !== news.role) ||
-            (olds.member !== undefined && olds.member !== news.member)
+            (priorBucket !== undefined && priorBucket !== news.bucket) ||
+            (priorRole !== undefined && priorRole !== news.role) ||
+            (priorMember !== undefined && priorMember !== news.member)
           ) {
             return { action: "replace" } as const;
           }

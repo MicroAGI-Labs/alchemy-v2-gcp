@@ -15,4 +15,5 @@ export {
 export type {
   StorageBucketIamMemberProps,
   StorageBucketIamMemberAttributes,
+  StorageBucketIamMemberCondition,
 } from "./StorageBucketIamMember.ts";

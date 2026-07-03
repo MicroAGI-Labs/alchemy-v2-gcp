@@ -278,14 +278,20 @@ export const StorageBucketIamMemberProvider = () =>
             ...(news.condition ? { condition: news.condition } : {}),
           };
         }),
-        delete: Effect.fn(function* ({ output }) {
+        delete: Effect.fn(function* ({ output, olds = {} }) {
+          const bucket = output?.bucket || olds.bucket;
+          const role = output?.role || olds.role;
+          const member = output?.member || olds.member;
+          const condition = output?.condition?.expression
+            ? output.condition
+            : olds.condition;
           // Partially-persisted attributes (empty fields) name no real
           // grant — nothing to revoke, and getIamPolicy("") would 4xx.
-          if (!output.bucket || !output.role || !output.member) return;
+          if (!bucket || !role || !member) return;
           yield* etagRetry(
             Effect.gen(function* () {
               const current = yield* getIamPolicyBuckets({
-                bucket: output.bucket,
+                bucket,
                 optionsRequestedPolicyVersion: 3,
               }).pipe(
                 // Bucket gone (or unreadable because gone) — the grant
@@ -296,7 +302,7 @@ export const StorageBucketIamMemberProvider = () =>
               );
               if (
                 !current ||
-                !hasMember(current, output.role, output.member, output.condition)
+                !hasMember(current, role, member, condition)
               ) {
                 return;
               }
@@ -305,18 +311,18 @@ export const StorageBucketIamMemberProvider = () =>
               // bindings with zero members).
               const bindings = (current.bindings ?? [])
                 .map((b) =>
-                  bindingMatches(b, output.role, output.condition)
+                  bindingMatches(b, role, condition)
                     ? {
                         ...b,
                         members: (b.members ?? []).filter(
-                          (m) => m !== output.member,
+                          (m) => m !== member,
                         ),
                       }
                     : { ...b, members: [...(b.members ?? [])] },
                 )
                 .filter((b) => (b.members?.length ?? 0) > 0);
               yield* setIamPolicyBuckets({
-                bucket: output.bucket,
+                bucket,
                 body: { ...current, bindings, version: 3 },
               }).pipe(Effect.catchTag("NotFound", () => Effect.void));
             }),

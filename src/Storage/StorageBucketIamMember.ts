@@ -164,7 +164,7 @@ export const StorageBucketIamMemberProvider = () =>
       const bindingMatches = (
         b: { role?: string; condition?: { expression?: string } },
         role: string,
-        condition?: StorageBucketIamMemberCondition,
+        condition?: { expression: string },
       ) =>
         b.role === role &&
         (condition
@@ -175,7 +175,7 @@ export const StorageBucketIamMemberProvider = () =>
         policy: storage.Policy,
         role: string,
         member: string,
-        condition?: StorageBucketIamMemberCondition,
+        condition?: { expression: string },
       ) =>
         (policy.bindings ?? []).some(
           (b) =>
@@ -290,7 +290,11 @@ export const StorageBucketIamMemberProvider = () =>
           // UNCONDITIONAL binding — either revoking a member some other
           // resource owns there, or no-op'ing and leaving the scoped
           // grant behind.
-          const condition = output.condition ?? olds?.condition;
+          const conditionExpression =
+            output.condition?.expression || olds?.condition?.expression || "";
+          const condition = conditionExpression
+            ? { expression: conditionExpression }
+            : undefined;
           yield* etagRetry(
             Effect.gen(function* () {
               const current = yield* getIamPolicyBuckets({

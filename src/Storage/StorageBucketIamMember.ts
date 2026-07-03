@@ -211,9 +211,11 @@ export const StorageBucketIamMemberProvider = () =>
           // bucket names no grant to revoke). Absent condition compares
           // as "" so unconditional↔conditional flips replace, while a
           // 0.10.x record (no condition attribute) vs. unconditional
-          // props stays a no-op.
+          // props stays a no-op. `||` like the triple above: an empty
+          // persisted expression is NOT a prior identity and must not
+          // block the olds fallback.
           const priorCond =
-            output?.condition?.expression ?? olds.condition?.expression ?? "";
+            output?.condition?.expression || olds.condition?.expression || "";
           const newsCond = news.condition?.expression ?? "";
           if (priorBucket && priorCond !== newsCond) {
             return { action: "replace" } as const;
@@ -278,10 +280,23 @@ export const StorageBucketIamMemberProvider = () =>
             ...(news.condition ? { condition: news.condition } : {}),
           };
         }),
-        delete: Effect.fn(function* ({ output }) {
+        delete: Effect.fn(function* ({ output, olds }) {
           // Partially-persisted attributes (empty fields) name no real
           // grant — nothing to revoke, and getIamPolicy("") would 4xx.
           if (!output.bucket || !output.role || !output.member) return;
+          // Prior condition with an olds fallback: if the persisted
+          // attributes lost the condition while the live binding is
+          // conditional, matching without it would target the
+          // UNCONDITIONAL binding — either revoking a member some other
+          // resource owns there, or no-op'ing and leaving the scoped
+          // grant behind. Selected on expression TRUTHINESS (same rule
+          // as diff's `||` chain): a stub condition with an empty
+          // expression is not a prior identity and must not block olds.
+          const condition = output.condition?.expression
+            ? output.condition
+            : olds?.condition?.expression
+              ? olds.condition
+              : undefined;
           yield* etagRetry(
             Effect.gen(function* () {
               const current = yield* getIamPolicyBuckets({
@@ -296,7 +311,7 @@ export const StorageBucketIamMemberProvider = () =>
               );
               if (
                 !current ||
-                !hasMember(current, output.role, output.member, output.condition)
+                !hasMember(current, output.role, output.member, condition)
               ) {
                 return;
               }
@@ -305,7 +320,7 @@ export const StorageBucketIamMemberProvider = () =>
               // bindings with zero members).
               const bindings = (current.bindings ?? [])
                 .map((b) =>
-                  bindingMatches(b, output.role, output.condition)
+                  bindingMatches(b, output.role, condition)
                     ? {
                         ...b,
                         members: (b.members ?? []).filter(

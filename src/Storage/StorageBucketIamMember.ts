@@ -289,8 +289,14 @@ export const StorageBucketIamMemberProvider = () =>
           // conditional, matching without it would target the
           // UNCONDITIONAL binding — either revoking a member some other
           // resource owns there, or no-op'ing and leaving the scoped
-          // grant behind.
-          const condition = output.condition ?? olds?.condition;
+          // grant behind. Selected on expression TRUTHINESS (same rule
+          // as diff's `||` chain): a stub condition with an empty
+          // expression is not a prior identity and must not block olds.
+          const condition = output.condition?.expression
+            ? output.condition
+            : olds?.condition?.expression
+              ? olds.condition
+              : undefined;
           yield* etagRetry(
             Effect.gen(function* () {
               const current = yield* getIamPolicyBuckets({

@@ -145,11 +145,20 @@ const caFetch = (caPem: string): typeof globalThis.fetch =>
     });
   }) as typeof globalThis.fetch;
 
-/** `HttpClient` layer whose fetch trusts the given (base64 PEM) cluster CA. */
+/**
+ * `HttpClient` layer whose fetch trusts the given (base64 PEM) cluster CA.
+ *
+ * `FetchHttpClient.Fetch` is a `Context.Reference` that the client reads
+ * per-request from the CALLING fiber (`fiber.getRef(Fetch)`), not at layer
+ * construction. It must therefore be `Layer.merge`d into the output context
+ * so `Effect.provide(clusterLayer(...))` puts it in the request fiber —
+ * `Layer.provide` would scope it to layer construction only, leaving every
+ * request on `globalThis.fetch`, which fails TLS against the cluster CA.
+ */
 const caHttpClient = (
   caCertificate: string,
 ): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.provide(
+  Layer.merge(
     FetchHttpClient.layer,
     Layer.succeed(
       FetchHttpClient.Fetch,

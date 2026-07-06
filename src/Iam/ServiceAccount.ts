@@ -151,8 +151,15 @@ export const ServiceAccountProvider = () =>
       const getIamPolicyProjectsServiceAccounts = yield* iam.getIamPolicyProjectsServiceAccounts;
       const setIamPolicyProjectsServiceAccounts = yield* iam.setIamPolicyProjectsServiceAccounts;
 
+      // The `{name}` segment of the IAM API path must be the SA email (or
+      // uniqueId) — the short accountId 404s. Expand bare accountIds to the
+      // canonical email form.
       const resourceName = (projectId: string, accountId: string) =>
-        `projects/${projectId}/serviceAccounts/${accountId}`;
+        `projects/${projectId}/serviceAccounts/${
+          accountId.includes("@")
+            ? accountId
+            : `${accountId}@${projectId}.iam.gserviceaccount.com`
+        }`;
 
       const observeServiceAccount = (projectId: string, accountId: string) =>
         getProjectsServiceAccounts({
@@ -244,7 +251,12 @@ export const ServiceAccountProvider = () =>
 
         if (updateMaskFields.length === 0) return observed;
 
-        return yield* patchProjectsServiceAccounts({
+        // The PATCH response is partial — only the patched fields plus
+        // `name` come back; email/uniqueId/projectId arrive empty. Merge it
+        // over the observed resource so the returned attributes (and hence
+        // persisted state, and every downstream `sa.email` interpolation)
+        // stay complete.
+        const patched = yield* patchProjectsServiceAccounts({
           name: observed.name!,
           body: {
             updateMask: updateMaskFields.join(","),
@@ -254,6 +266,12 @@ export const ServiceAccountProvider = () =>
             },
           },
         });
+        return {
+          ...observed,
+          ...Object.fromEntries(
+            Object.entries(patched).filter(([, v]) => v !== undefined && v !== ""),
+          ),
+        } as iam.ServiceAccount;
       });
 
       // Apply merged IAM bindings as a single setIamPolicy. Same

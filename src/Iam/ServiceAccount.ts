@@ -252,10 +252,11 @@ export const ServiceAccountProvider = () =>
         if (updateMaskFields.length === 0) return observed;
 
         // The PATCH response is partial — only the patched fields plus
-        // `name` come back; email/uniqueId/projectId arrive empty. Merge it
-        // over the observed resource so the returned attributes (and hence
-        // persisted state, and every downstream `sa.email` interpolation)
-        // stay complete.
+        // `name` come back; email/uniqueId/projectId arrive empty.
+        // Returning it verbatim would persist empty identity attributes
+        // (and poison every downstream `sa.email` interpolation), so take
+        // the observed resource and overlay ONLY the fields we actually
+        // patched — this also honours an intentional clear-to-empty.
         const patched = yield* patchProjectsServiceAccounts({
           name: observed.name!,
           body: {
@@ -268,9 +269,12 @@ export const ServiceAccountProvider = () =>
         });
         return {
           ...observed,
-          ...Object.fromEntries(
-            Object.entries(patched).filter(([, v]) => v !== undefined && v !== ""),
-          ),
+          ...(updateMaskFields.includes("display_name")
+            ? { displayName: patched.displayName }
+            : {}),
+          ...(updateMaskFields.includes("description")
+            ? { description: patched.description }
+            : {}),
         } as iam.ServiceAccount;
       });
 

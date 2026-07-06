@@ -151,8 +151,15 @@ export const ServiceAccountProvider = () =>
       const getIamPolicyProjectsServiceAccounts = yield* iam.getIamPolicyProjectsServiceAccounts;
       const setIamPolicyProjectsServiceAccounts = yield* iam.setIamPolicyProjectsServiceAccounts;
 
+      // The `{name}` segment of the IAM API path must be the SA email (or
+      // uniqueId) — the short accountId 404s. Expand bare accountIds to the
+      // canonical email form.
       const resourceName = (projectId: string, accountId: string) =>
-        `projects/${projectId}/serviceAccounts/${accountId}`;
+        `projects/${projectId}/serviceAccounts/${
+          accountId.includes("@")
+            ? accountId
+            : `${accountId}@${projectId}.iam.gserviceaccount.com`
+        }`;
 
       const observeServiceAccount = (projectId: string, accountId: string) =>
         getProjectsServiceAccounts({
@@ -244,7 +251,13 @@ export const ServiceAccountProvider = () =>
 
         if (updateMaskFields.length === 0) return observed;
 
-        return yield* patchProjectsServiceAccounts({
+        // The PATCH response is partial — only the patched fields plus
+        // `name` come back; email/uniqueId/projectId arrive empty.
+        // Returning it verbatim would persist empty identity attributes
+        // (and poison every downstream `sa.email` interpolation), so take
+        // the observed resource and overlay ONLY the fields we actually
+        // patched — this also honours an intentional clear-to-empty.
+        const patched = yield* patchProjectsServiceAccounts({
           name: observed.name!,
           body: {
             updateMask: updateMaskFields.join(","),
@@ -254,6 +267,15 @@ export const ServiceAccountProvider = () =>
             },
           },
         });
+        return {
+          ...observed,
+          ...(updateMaskFields.includes("display_name")
+            ? { displayName: patched.displayName }
+            : {}),
+          ...(updateMaskFields.includes("description")
+            ? { description: patched.description }
+            : {}),
+        } as iam.ServiceAccount;
       });
 
       // Apply merged IAM bindings as a single setIamPolicy. Same

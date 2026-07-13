@@ -73,6 +73,8 @@ export type ClusterProps = {
     servicesIpv4CidrBlock?: string;
     clusterSecondaryRangeName?: string;
     servicesSecondaryRangeName?: string;
+    /** Cluster egress network service tier. Mutable via `update`. */
+    networkTierConfig?: cont.NetworkTierConfig;
   };
   /**
    * Cluster-level network settings. `datapathProvider:
@@ -435,7 +437,8 @@ export const ClusterProvider = () =>
       });
 
       // Catch-all generic update for fields without dedicated setters:
-      // currently `releaseChannel` and `workloadIdentityConfig`. The
+      // currently `releaseChannel`, `workloadIdentityConfig`, and the
+      // cluster network tier. The
       // API auto-derives the field mask from which `desired*` keys are
       // populated — no `updateMask` parameter needed.
       const syncClusterUpdate = Effect.fn(function* (args: {
@@ -456,6 +459,16 @@ export const ClusterProvider = () =>
           !deepEqual(args.observed.workloadIdentityConfig, args.news.workloadIdentityConfig)
         ) {
           update.desiredWorkloadIdentityConfig = args.news.workloadIdentityConfig;
+        }
+        if (
+          args.news.ipAllocationPolicy?.networkTierConfig &&
+          !deepEqual(
+            args.observed.ipAllocationPolicy?.networkTierConfig,
+            args.news.ipAllocationPolicy.networkTierConfig,
+          )
+        ) {
+          update.desiredNetworkTierConfig =
+            args.news.ipAllocationPolicy.networkTierConfig;
         }
         if (Object.keys(update).length === 0) return;
         const op = yield* updateClusters({
@@ -487,7 +500,11 @@ export const ClusterProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
-          if (!deepEqual(olds.ipAllocationPolicy, news.ipAllocationPolicy)) {
+          const { networkTierConfig: _oldTier, ...oldIpAllocationPolicy } =
+            olds.ipAllocationPolicy ?? {};
+          const { networkTierConfig: _newTier, ...newIpAllocationPolicy } =
+            news.ipAllocationPolicy ?? {};
+          if (!deepEqual(oldIpAllocationPolicy, newIpAllocationPolicy)) {
             return { action: "replace" } as const;
           }
           // `initialNodePool` and `networkConfig` are intentionally NOT

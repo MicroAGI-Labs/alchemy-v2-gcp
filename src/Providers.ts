@@ -15,6 +15,10 @@ import {
 } from "./Compute/ForwardingRule.ts";
 import { GlobalAddress, GlobalAddressProvider } from "./Compute/GlobalAddress.ts";
 import { Network, NetworkProvider } from "./Compute/Network.ts";
+import {
+  ProjectDefaultNetworkTier,
+  ProjectDefaultNetworkTierProvider,
+} from "./Compute/ProjectDefaultNetworkTier.ts";
 import { SharedVpcHost, SharedVpcHostProvider } from "./Compute/SharedVpcHost.ts";
 import {
   SharedVpcServiceProject,
@@ -94,6 +98,7 @@ export const providers = () =>
       NodePool,
       ApiEnable,
       Network,
+      ProjectDefaultNetworkTier,
       Subnetwork,
       Firewall,
       Address,
@@ -125,6 +130,7 @@ export const providers = () =>
         NodePoolProvider(),
         ApiEnableProvider(),
         NetworkProvider(),
+        ProjectDefaultNetworkTierProvider(),
         SubnetworkProvider(),
         FirewallProvider(),
         AddressProvider(),

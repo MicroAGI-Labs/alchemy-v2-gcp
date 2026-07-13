@@ -29,6 +29,11 @@ export const ProjectDefaultNetworkTier = Resource<ProjectDefaultNetworkTier>(
   "GCP.ProjectDefaultNetworkTier",
 );
 
+const isProjectNetworkTier = (
+  value: string | undefined,
+): value is ProjectDefaultNetworkTierAttributes["networkTier"] =>
+  value === "PREMIUM" || value === "STANDARD";
+
 /** Manage the Compute Engine project-wide default network service tier. */
 export const ProjectDefaultNetworkTierProvider = () =>
   Provider.effect(
@@ -87,14 +92,9 @@ export const ProjectDefaultNetworkTierProvider = () =>
           const project = output?.project ?? olds?.project;
           if (!project) return undefined;
           const observed = yield* observe(project);
-          if (!observed?.defaultNetworkTier) return undefined;
-          if (
-            observed.defaultNetworkTier !== "PREMIUM" &&
-            observed.defaultNetworkTier !== "STANDARD"
-          ) {
-            return undefined;
-          }
-          return { project, networkTier: observed.defaultNetworkTier };
+          const networkTier = observed?.defaultNetworkTier;
+          if (!isProjectNetworkTier(networkTier)) return undefined;
+          return { project, networkTier };
         }),
       };
     }),

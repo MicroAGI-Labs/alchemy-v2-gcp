@@ -56,6 +56,15 @@ export const ProjectDefaultNetworkTierProvider = () =>
           if (olds.project !== undefined && olds.project !== news.project) {
             return { action: "replace" } as const;
           }
+
+          // This project-scoped setting can drift independently of Alchemy's
+          // persisted props (for example through the Cloud Console or gcloud).
+          // Existing resources do not pass through `read`, so consult the live
+          // project here and force reconcile whenever reality differs.
+          const observed = yield* observe(news.project);
+          if (observed?.defaultNetworkTier !== news.networkTier) {
+            return { action: "update" } as const;
+          }
           return undefined;
         }),
         reconcile: Effect.fn(function* ({ news, session }) {

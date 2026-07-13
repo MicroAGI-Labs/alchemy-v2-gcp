@@ -73,6 +73,8 @@ export type ClusterProps = {
     servicesIpv4CidrBlock?: string;
     clusterSecondaryRangeName?: string;
     servicesSecondaryRangeName?: string;
+    /** Cluster egress network service tier. Mutable via `update`. */
+    networkTierConfig?: cont.NetworkTierConfig;
   };
   /**
    * Cluster-level network settings. `datapathProvider:
@@ -250,6 +252,32 @@ export type Cluster = Resource<
   GCP.Providers
 >;
 export const Cluster = Resource<Cluster>("GCP.Cluster");
+
+/** @internal Pure replacement decision, exported for focused unit tests. */
+export const diffClusterProps = (
+  olds: Partial<ClusterProps>,
+  news: ClusterProps,
+): { action: "replace" } | undefined => {
+  if (
+    somePropsAreDifferent(olds as ClusterProps, news, [
+      "project",
+      "location",
+      "name",
+      "network",
+      "subnetwork",
+    ])
+  ) {
+    return { action: "replace" };
+  }
+  const { networkTierConfig: _oldTier, ...oldIpAllocationPolicy } =
+    olds.ipAllocationPolicy ?? {};
+  const { networkTierConfig: _newTier, ...newIpAllocationPolicy } =
+    news.ipAllocationPolicy ?? {};
+  if (!deepEqual(oldIpAllocationPolicy, newIpAllocationPolicy)) {
+    return { action: "replace" };
+  }
+  return undefined;
+};
 
 /**
  * Build the inline `NodePool` entry for the cluster create body.
@@ -435,7 +463,8 @@ export const ClusterProvider = () =>
       });
 
       // Catch-all generic update for fields without dedicated setters:
-      // currently `releaseChannel` and `workloadIdentityConfig`. The
+      // currently `releaseChannel`, `workloadIdentityConfig`, and the
+      // cluster network tier. The
       // API auto-derives the field mask from which `desired*` keys are
       // populated — no `updateMask` parameter needed.
       const syncClusterUpdate = Effect.fn(function* (args: {
@@ -457,6 +486,16 @@ export const ClusterProvider = () =>
         ) {
           update.desiredWorkloadIdentityConfig = args.news.workloadIdentityConfig;
         }
+        if (
+          args.news.ipAllocationPolicy?.networkTierConfig &&
+          !deepEqual(
+            args.observed.ipAllocationPolicy?.networkTierConfig,
+            args.news.ipAllocationPolicy.networkTierConfig,
+          )
+        ) {
+          update.desiredNetworkTierConfig =
+            args.news.ipAllocationPolicy.networkTierConfig;
+        }
         if (Object.keys(update).length === 0) return;
         const op = yield* updateClusters({
           name: args.fqName,
@@ -476,25 +515,11 @@ export const ClusterProvider = () =>
         ],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
-          if (
-            somePropsAreDifferent(olds as ClusterProps, news, [
-              "project",
-              "location",
-              "name",
-              "network",
-              "subnetwork",
-            ])
-          ) {
-            return { action: "replace" } as const;
-          }
-          if (!deepEqual(olds.ipAllocationPolicy, news.ipAllocationPolicy)) {
-            return { action: "replace" } as const;
-          }
           // `initialNodePool` and `networkConfig` are intentionally NOT
           // part of diff — both are consumed only on create. See the
           // ClusterProps JSDoc (networkConfig explains why a same-name
           // replace would be destructive).
-          return undefined;
+          return diffClusterProps(olds, news);
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           const internalLabels = yield* gcpInternalLabels(id);

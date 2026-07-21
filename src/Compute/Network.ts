@@ -326,7 +326,7 @@ export const NetworkProvider = () =>
           return toNetworkAttributes(final, { project: news.project });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteNetworks({
+          const deletion = deleteNetworks({
             project: output.project,
             network: output.name,
           }).pipe(
@@ -335,6 +335,8 @@ export const NetworkProvider = () =>
                 ? awaitOp(output.project, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),

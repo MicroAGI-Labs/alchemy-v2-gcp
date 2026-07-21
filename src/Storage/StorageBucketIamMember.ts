@@ -150,9 +150,10 @@ export const StorageBucketIamMemberProvider = () =>
         eff.pipe(
           Effect.retry({
             while: (e) => (e as { _tag?: string })?._tag !== "ConfigError",
-            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(2)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 

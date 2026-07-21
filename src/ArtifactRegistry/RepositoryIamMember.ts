@@ -76,9 +76,10 @@ export const ArtifactRegistryRepositoryIamMemberProvider = () =>
         effect.pipe(
           Effect.retry({
             while: (error) => (error as { _tag?: string })?._tag === "Conflict",
-            schedule: Schedule.exponential(Duration.millis(250)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.millis(250)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 

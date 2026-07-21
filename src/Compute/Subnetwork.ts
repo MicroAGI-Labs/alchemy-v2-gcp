@@ -254,9 +254,10 @@ export const SubnetworkProvider = () =>
           // multiple bindings in parallel, races are common. Cap at
           // ~1.5 min total to surface real failures.
           Effect.retry({
-            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(2)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 
@@ -445,7 +446,7 @@ export const SubnetworkProvider = () =>
           });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteSubnetworks({
+          const deletion = deleteSubnetworks({
             project: output.project,
             region: output.region,
             subnetwork: output.name,
@@ -455,6 +456,8 @@ export const SubnetworkProvider = () =>
                 ? awaitOp(output.project, output.region, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),

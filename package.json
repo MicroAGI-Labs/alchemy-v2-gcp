@@ -53,10 +53,10 @@
     "google-auth-library": "^10.4.0"
   },
   "peerDependencies": {
-    "@distilled.cloud/gcp": ">=0.16.9",
-    "@distilled.cloud/kubernetes": ">=0.24.9",
-    "alchemy": ">=2.0.0-beta.30",
-    "effect": ">=4.0.0-beta.60 || >=4.0.0"
+    "@distilled.cloud/gcp": ">=0.29.1",
+    "@distilled.cloud/kubernetes": ">=0.29.1",
+    "alchemy": ">=2.0.0-beta.63",
+    "effect": ">=4.0.0-beta.97 || >=4.0.0"
   },
   "devDependencies": {
     "@distilled.cloud/gcp": "workspace:*",
@@ -64,8 +64,8 @@
     "@types/bun": "latest",
     "@types/node": "latest",
     "alchemy": "workspace:*",
-    "effect": ">=4.0.0-beta.60 || >=4.0.0",
-    "typescript": "^6.0.3"
+    "effect": ">=4.0.0-beta.97 || >=4.0.0",
+    "typescript": "^7.0.2"
   },
   "publishConfig": {
     "access": "public"

@@ -34,7 +34,8 @@ type GetOperations = Effect.Success<typeof ar.getProjectsLocationsOperations>;
  * dance needed (unlike Container, which returns bare ids).
  *
  * Schedule: exponential 1s → 1.5× growth, capped per-poll at 10s via
- * `Schedule.either`, then a hard count cap of 60 retries → ~10 min wall
+ * `Schedule.min`, then a hard count cap of 60 retries via `Schedule.max`
+ * → ~10 min wall
  * ceiling. Repository CRUD is fast (seconds); the only long-running
  * case is a delete on a repository with many cached images, where AR
  * has to GC the underlying blobs.
@@ -57,10 +58,14 @@ export const makeAwaitOperation = (getOperations: GetOperations) =>
       ),
       Effect.retry({
         while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-        schedule: Schedule.exponential(Duration.seconds(1), 1.5).pipe(
-          Schedule.either(Schedule.spaced(Duration.seconds(10))),
-          Schedule.both(Schedule.recurs(60)),
-          Schedule.tapOutput(() =>
+        schedule: Schedule.max([
+          Schedule.min([
+            Schedule.exponential(Duration.seconds(1), 1.5),
+            Schedule.spaced(Duration.seconds(10)),
+          ]),
+          Schedule.recurs(60),
+        ]).pipe(
+          Schedule.tap(() =>
             session.note(
               `Waiting for Artifact Registry operation ${operationName}…`,
             ),

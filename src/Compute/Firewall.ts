@@ -297,7 +297,7 @@ export const FirewallProvider = () =>
           return toFirewallAttributes(final, { project: news.project });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteFirewalls({
+          const deletion = deleteFirewalls({
             project: output.project,
             firewall: output.name,
           }).pipe(
@@ -306,6 +306,8 @@ export const FirewallProvider = () =>
                 ? awaitOp(output.project, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),

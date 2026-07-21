@@ -247,12 +247,16 @@ export const ManagedLustreInstanceProvider = () =>
           ),
           Effect.retry({
             while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-            schedule: Schedule.exponential(Duration.seconds(5), 1.5).pipe(
-              Schedule.either(Schedule.spaced(Duration.seconds(30))),
+            schedule: Schedule.max([
+              Schedule.min([
+                Schedule.exponential(Duration.seconds(5), 1.5),
+                Schedule.spaced(Duration.seconds(30)),
+              ]),
               // Lustre creates run 10–25 min for multi-TiB instances.
               // 200 × 30s ≈ 100 min wall ceiling.
-              Schedule.both(Schedule.recurs(200)),
-              Schedule.tapOutput(() =>
+              Schedule.recurs(200),
+            ]).pipe(
+              Schedule.tap(() =>
                 session.note(`Waiting for Managed Lustre operation ${operationName}…`),
               ),
             ),

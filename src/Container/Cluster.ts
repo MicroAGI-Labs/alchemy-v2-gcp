@@ -595,9 +595,11 @@ export const ClusterProvider = () =>
                 while: (e: { _tag?: string; message?: string }) =>
                   e?._tag === "Forbidden" &&
                   /enabled this API recently|has not been used/i.test(e.message ?? ""),
-                schedule: Schedule.spaced(Duration.seconds(15)).pipe(
-                  Schedule.both(Schedule.recurs(20)), // 20 × 15s ≈ 5 min
-                  Schedule.tapOutput(() =>
+                schedule: Schedule.max([
+                  Schedule.spaced(Duration.seconds(15)),
+                  Schedule.recurs(20), // 20 × 15s ≈ 5 min
+                ]).pipe(
+                  Schedule.tap(() =>
                     session.note(
                       "Waiting for Container API enablement to propagate…",
                     ),

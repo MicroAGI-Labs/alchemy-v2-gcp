@@ -105,6 +105,8 @@ Long-running operations (`createProjects`, `patchProjects`, GKE cluster ops, Clo
 
 ### Storage
 - **`GCP.ManagedLustreInstance`** — Managed Lustre filesystem instance.
+- **`GCP.ArtifactRegistryRepository`** — standard or remote Artifact Registry repository.
+- **`GCP.ArtifactRegistryRepositoryIamMember`** — one revocable repository-scoped IAM grant.
 
 Each resource's full prop/attribute set is documented as JSDoc on the source.
 

@@ -4,6 +4,10 @@ import {
   ArtifactRegistryRepository,
   ArtifactRegistryRepositoryProvider,
 } from "./ArtifactRegistry/Repository.ts";
+import {
+  ArtifactRegistryRepositoryIamMember,
+  ArtifactRegistryRepositoryIamMemberProvider,
+} from "./ArtifactRegistry/RepositoryIamMember.ts";
 import { GCPAuth } from "./Auth/AuthProvider.ts";
 import { fromAuthProvider } from "./Auth/Credentials.ts";
 import { Project, ProjectProvider } from "./CloudResourceManager/Project.ts";
@@ -116,6 +120,7 @@ export const providers = () =>
       SqlDatabase,
       SqlUser,
       ArtifactRegistryRepository,
+      ArtifactRegistryRepositoryIamMember,
       ServiceAccount,
       ServiceAccountKey,
       KubernetesSecret,
@@ -148,6 +153,7 @@ export const providers = () =>
         SqlDatabaseProvider(),
         SqlUserProvider(),
         ArtifactRegistryRepositoryProvider(),
+        ArtifactRegistryRepositoryIamMemberProvider(),
         ServiceAccountProvider(),
         ServiceAccountKeyProvider(),
         KubernetesSecretProvider(),

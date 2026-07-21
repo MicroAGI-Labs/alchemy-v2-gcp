@@ -4,6 +4,16 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **`GCP.ArtifactRegistryRepositoryIamMember`** — standalone resource
+  managing one unconditional `(repository, role, member)` IAM grant. It
+  preserves foreign and conditional bindings plus the policy etag, retries
+  concurrent policy updates, detects out-of-band revocation as drift, and
+  removes exactly its own member on delete.
+
 ## 0.10.0 — 2026-07-02
 
 ### Added

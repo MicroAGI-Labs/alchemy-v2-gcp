@@ -7,4 +7,12 @@ export type {
   ArtifactRegistryRepositoryAttributes,
   ArtifactRegistryRepositoryProps,
 } from "./Repository.ts";
+export {
+  ArtifactRegistryRepositoryIamMember,
+  ArtifactRegistryRepositoryIamMemberProvider,
+} from "./RepositoryIamMember.ts";
+export type {
+  ArtifactRegistryRepositoryIamMemberAttributes,
+  ArtifactRegistryRepositoryIamMemberProps,
+} from "./RepositoryIamMember.ts";
 export type { ArtifactRegistryFormat, ArtifactRegistryMode } from "./Types.ts";

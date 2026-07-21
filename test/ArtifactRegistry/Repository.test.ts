@@ -1,5 +1,6 @@
 import * as ar from "@distilled.cloud/gcp/artifactregistry-v1";
 import * as GCP from "@microagi/alchemy-gcp";
+import * as Output from "alchemy/Output";
 import * as Test from "alchemy/Test/Bun";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
@@ -34,19 +35,27 @@ const runOrSkip =
   FOLDER_ID && BILLING_ACCOUNT ? test.provider : test.provider.skip;
 
 runOrSkip(
-  "create standard + remote repos, re-deploy, patch labels, destroy",
+  "create repos, manage repository IAM, re-deploy, patch, destroy",
   (stack) =>
     Effect.gen(function* () {
       yield* stack.destroy();
 
       const projectId = `alchemy-test-${runId()}`;
 
-      const buildGraph = (extraLabels?: Record<string, string>) =>
+      const buildGraph = (
+        extraLabels?: Record<string, string>,
+        grantReader = true,
+      ) =>
         Effect.gen(function* () {
           const project = yield* GCP.Project("ArProj", {
             projectId,
             parent: { type: "folder", id: FOLDER_ID! },
             billingAccount: BILLING_ACCOUNT,
+          });
+          const testReader = yield* GCP.ServiceAccount("ArTestReader", {
+            project: project.projectId,
+            accountId: "ar-test-reader",
+            displayName: "Artifact Registry IAM lifecycle test",
           });
           const arApi = yield* GCP.ApiEnable("ArApi", {
             project: project.projectId,
@@ -59,6 +68,19 @@ runOrSkip(
             description: "App images built by CI",
             labels: extraLabels,
           });
+          if (grantReader) {
+            yield* GCP.ArtifactRegistryRepositoryIamMember(
+              "AppsAuthenticatedReader",
+              {
+                repository: apps.fullyQualifiedName,
+                role: "roles/artifactregistry.reader",
+                member: Output.map(
+                  testReader.email,
+                  (email) => `serviceAccount:${email}`,
+                ) as unknown as string,
+              },
+            );
+          }
           const dockerHubMirror = yield* GCP.ArtifactRegistryRepository(
             "DockerHubMirror",
             {
@@ -87,7 +109,7 @@ runOrSkip(
               },
             },
           );
-          return { project, apps, dockerHubMirror, nvcrMirror };
+          return { project, testReader, apps, dockerHubMirror, nvcrMirror };
         });
 
       const v1 = yield* stack.deploy(buildGraph());
@@ -101,6 +123,20 @@ runOrSkip(
       expect(v1.apps.labels.alchemy_app).toBeDefined();
       expect(v1.apps.labels.alchemy_stage).toBe("test");
       expect(v1.apps.labels.alchemy_id).toBeDefined();
+
+      const policyV1 =
+        yield* ar.getIamPolicyProjectsLocationsRepositories({
+          resource: v1.apps.fullyQualifiedName,
+          "options.requestedPolicyVersion": 3,
+        });
+      expect(
+        policyV1.bindings?.some(
+          (binding) =>
+            binding.role === "roles/artifactregistry.reader" &&
+            !binding.condition &&
+            binding.members?.includes(`serviceAccount:${v1.testReader.email}`),
+        ),
+      ).toBe(true);
 
       expect(v1.dockerHubMirror.mode).toBe("REMOTE_REPOSITORY");
       expect(v1.nvcrMirror.mode).toBe("REMOTE_REPOSITORY");
@@ -126,6 +162,25 @@ runOrSkip(
         name: v3.apps.fullyQualifiedName,
       });
       expect(fetched.labels?.env).toBe("test");
+
+      // Removing the member resource revokes exactly its grant while the
+      // repository remains managed by the stack.
+      const v4 = yield* stack.deploy(
+        buildGraph({ env: "test", owner: "research" }, false),
+      );
+      const policyV4 =
+        yield* ar.getIamPolicyProjectsLocationsRepositories({
+          resource: v4.apps.fullyQualifiedName,
+          "options.requestedPolicyVersion": 3,
+        });
+      expect(
+        policyV4.bindings?.some(
+          (binding) =>
+            binding.role === "roles/artifactregistry.reader" &&
+            !binding.condition &&
+            binding.members?.includes(`serviceAccount:${v4.testReader.email}`),
+        ) ?? false,
+      ).toBe(false);
 
       yield* stack.destroy();
       yield* stack.destroy();

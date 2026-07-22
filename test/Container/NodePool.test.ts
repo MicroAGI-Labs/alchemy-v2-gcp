@@ -31,7 +31,10 @@ runOrSkip(
 
       const projectId = `alchemy-test-${runId()}`;
 
-      const buildGraph = (initialNodeCount: number) =>
+      const buildGraph = (
+        initialNodeCount: number,
+        externallyManagedSize = false,
+      ) =>
         Effect.gen(function* () {
           const project = yield* GCP.Project("PoolTestProj", {
             projectId,
@@ -61,6 +64,7 @@ runOrSkip(
             location: cluster.location,
             clusterName: cluster.name,
             initialNodeCount,
+            externallyManagedSize,
             config: { machineType: "e2-standard-2" },
           });
           return { project, cluster, pool };
@@ -89,6 +93,16 @@ runOrSkip(
         name: `projects/${projectId}/locations/us-central1-a/clusters/${resized.cluster.name}/nodePools/${resized.pool.name}`,
       });
       expect(refetched.initialNodeCount).toBe(2);
+
+      // Switching to external size ownership leaves the observed size at 2
+      // even though the bootstrap count is back to 1. Alchemy continues to
+      // reconcile every other pool property, but must not call setSize.
+      const externallyManaged = yield* stack.deploy(buildGraph(1, true));
+      const externallyManagedFetched =
+        yield* cont.getProjectsLocationsClustersNodePools({
+          name: `projects/${projectId}/locations/us-central1-a/clusters/${externallyManaged.cluster.name}/nodePools/${externallyManaged.pool.name}`,
+        });
+      expect(externallyManagedFetched.initialNodeCount).toBe(2);
 
       yield* stack.destroy();
     }),

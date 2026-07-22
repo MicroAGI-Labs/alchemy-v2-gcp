@@ -34,11 +34,19 @@ export type NodePoolProps = {
    * without a positive node count, so when omitted we default to
    * `autoscaling.minNodeCount ?? 1` on the create path.
    *
-   * Subsequent size changes go via `setSize` when `autoscaling` is
-   * disabled, or are GKE-managed when `autoscaling.enabled` is true
-   * (the size sync is skipped to avoid fighting the autoscaler).
+   * Subsequent size changes go via `setSize` unless autoscaling or
+   * `externallyManagedSize` delegates steady-state size ownership.
    */
   initialNodeCount?: number;
+  /**
+   * Treat the pool's live size as externally owned after creation.
+   *
+   * `initialNodeCount` is still used to bootstrap a missing pool, but
+   * subsequent reconciles do not call GKE `setSize`. This is intended for
+   * imperative controllers that resize a pool while Alchemy continues to own
+   * its machine shape, labels, taints, management, and upgrade settings.
+   */
+  externallyManagedSize?: boolean;
   /**
    * Per-pool zones. Override the cluster default. Mutable via
    * `update` — sent in a standalone update body to avoid the SDK's
@@ -234,6 +242,19 @@ export type NodePool = Resource<
   GCP.Providers
 >;
 export const NodePool = Resource<NodePool>("GCP.NodePool");
+
+/** Whether a reconcile should bring a node pool back to its declared size. */
+export const nodePoolSizeNeedsSync = (
+  observedCount: number | undefined,
+  news: Pick<
+    NodePoolProps,
+    "initialNodeCount" | "autoscaling" | "externallyManagedSize"
+  >,
+): boolean =>
+  news.externallyManagedSize !== true &&
+  news.autoscaling?.enabled !== true &&
+  news.initialNodeCount !== undefined &&
+  observedCount !== news.initialNodeCount;
 
 /**
  * Translate a public `accelerators` spec into the SDK's
@@ -449,14 +470,14 @@ export const NodePoolProvider = () =>
         news: NodePoolProps;
         session: ScopedPlanStatusSession;
       }) {
-        // Skip when the autoscaler is enabled; fighting it creates churn.
-        if (args.news.autoscaling?.enabled) return;
-        if (args.news.initialNodeCount === undefined) return;
         const observedCount = args.observed.initialNodeCount;
-        if (observedCount === args.news.initialNodeCount) return;
+        // Skip when either GKE autoscaling or an external controller owns
+        // size; fighting either creates churn. Externally-managed pools still
+        // use initialNodeCount on the create path above.
+        if (!nodePoolSizeNeedsSync(observedCount, args.news)) return;
         const op = yield* setSize({
           name: args.fqName,
-          body: { nodeCount: args.news.initialNodeCount },
+          body: { nodeCount: args.news.initialNodeCount! },
         });
         if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });

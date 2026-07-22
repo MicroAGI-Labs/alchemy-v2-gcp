@@ -65,6 +65,17 @@ export default Alchemy.Stack(
       initialNodeCount: 2,
       config: { machineType: "n2-standard-16" },
     });
+
+    // An external controller may own steady-state size while Alchemy still
+    // uses initialNodeCount to bootstrap a missing pool.
+    yield* GCP.NodePool("externally-sized-gpu", {
+      project: project.projectId,
+      location: "us-central1",
+      clusterName: cluster.name,
+      initialNodeCount: 1,
+      externallyManagedSize: true,
+      config: { machineType: "g2-standard-12" },
+    });
   }),
 );
 ```

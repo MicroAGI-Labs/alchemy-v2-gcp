@@ -11,6 +11,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Require Alchemy beta.63, Distilled 0.29.1, and Effect beta.97, and migrate
   retry schedules and typed error handlers to their current Effect APIs.
 
+## 0.11.5 — 2026-07-22
+
+### Added
+
+- **`GCP.NodePool.externallyManagedSize`** — use `initialNodeCount` only when
+  creating the pool, then leave its live size to an imperative controller
+  while continuing to reconcile all other node-pool configuration.
+
 ## 0.11.4 — 2026-07-21
 
 ### Added

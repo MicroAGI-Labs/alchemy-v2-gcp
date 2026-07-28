@@ -330,9 +330,10 @@ export const ServiceAccountProvider = () =>
           });
         }).pipe(
           Effect.retry({
-            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(2)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 
@@ -340,6 +341,8 @@ export const ServiceAccountProvider = () =>
         // Stable identity: accountId + project; both immutable; either
         // change → replace. The server-assigned uniqueId is also stable
         // for the lifetime of the GSA (re-create gets a different one).
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["accountId", "projectId", "uniqueId", "name", "email"],
         diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

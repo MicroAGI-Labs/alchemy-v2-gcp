@@ -30,13 +30,17 @@ const formatOperationError = (op: compute.Operation): string => {
 const isDone = (op: compute.Operation): boolean => op.status === "DONE";
 
 const pollSchedule = (label: string, session: ScopedPlanStatusSession) =>
-  Schedule.exponential(Duration.seconds(2), 1.5).pipe(
-    Schedule.either(Schedule.spaced(Duration.seconds(15))),
+  Schedule.max([
+    Schedule.min([
+      Schedule.exponential(Duration.seconds(2), 1.5),
+      Schedule.spaced(Duration.seconds(15)),
+    ]),
     // 80 × ≤15s ≈ 20 min — long enough for a network create (~1 min),
     // a parallelstore-adjacent global op, or a 10-minute parallelstore
     // delete (longest LRO observed in this provider's surface).
-    Schedule.both(Schedule.recurs(80)),
-    Schedule.tapOutput(() =>
+    Schedule.recurs(80),
+  ]).pipe(
+    Schedule.tap(() =>
       session.note(`Waiting for Compute operation ${label}…`),
     ),
   );

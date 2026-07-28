@@ -329,6 +329,8 @@ export const HelmReleaseProvider = () =>
         // Identity (name/namespace/chart) and endpoint are unchanged by an
         // in-place upgrade. revision increments on every upgrade — it is NOT
         // stable (an update must persist the new revision).
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "namespace", "chart", "endpoint"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

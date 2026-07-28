@@ -46,8 +46,8 @@ type GetOperations = Effect.Success<typeof cont.getProjectsLocationsOperations>;
  * The doneness predicate compares `.status === "DONE"` accordingly.
  *
  * Schedule: exponential 2s → 1.5× growth, capped per-poll at 15s via
- * `Schedule.either`, then a hard count cap of 80 retries via
- * `Schedule.both(Schedule.recurs(80))` → ~20 min wall ceiling, well
+ * `Schedule.min`, then a hard count cap of 80 retries via
+ * `Schedule.max` → ~20 min wall ceiling, well
  * above the worst observed GKE op time (cluster create runs 5–10 min).
  *
  * The helper is a factory — the caller resolves
@@ -68,10 +68,14 @@ export const makeAwaitOperation = (getOperations: GetOperations) =>
       ),
       Effect.retry({
         while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-        schedule: Schedule.exponential(Duration.seconds(2), 1.5).pipe(
-          Schedule.either(Schedule.spaced(Duration.seconds(15))),
-          Schedule.both(Schedule.recurs(80)),
-          Schedule.tapOutput(() =>
+        schedule: Schedule.max([
+          Schedule.min([
+            Schedule.exponential(Duration.seconds(2), 1.5),
+            Schedule.spaced(Duration.seconds(15)),
+          ]),
+          Schedule.recurs(80),
+        ]).pipe(
+          Schedule.tap(() =>
             session.note(`Waiting for GKE operation ${operationName}…`),
           ),
         ),

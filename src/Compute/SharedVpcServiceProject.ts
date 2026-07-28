@@ -125,6 +125,8 @@ export const SharedVpcServiceProjectProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["hostProject", "serviceProject"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -153,7 +155,7 @@ export const SharedVpcServiceProjectProvider = () =>
           };
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* disableXpnResource({
+          const disabling = disableXpnResource({
             project: output.hostProject,
             body: {
               xpnResource: { type: "PROJECT", id: output.serviceProject },
@@ -164,6 +166,8 @@ export const SharedVpcServiceProjectProvider = () =>
                 ? awaitOp(output.hostProject, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* disabling.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
             // `BadRequest` covers "not attached to this host" (idempotent
             // detach); other 400s (resources still using shared subnets)

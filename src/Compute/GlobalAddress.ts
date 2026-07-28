@@ -176,6 +176,8 @@ export const GlobalAddressProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "project", "selfLink", "id", "address"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -248,7 +250,7 @@ export const GlobalAddressProvider = () =>
           return toGlobalAddressAttributes(final, { project: news.project });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteGlobalAddresses({
+          const deletion = deleteGlobalAddresses({
             project: output.project,
             address: output.name,
           }).pipe(
@@ -257,6 +259,8 @@ export const GlobalAddressProvider = () =>
                 ? awaitOp(output.project, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
             // 400 with "is being used by ..." comes back when a PSA
             // connection still references the range. The user has to

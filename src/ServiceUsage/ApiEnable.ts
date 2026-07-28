@@ -121,10 +121,14 @@ export const ApiEnableProvider = () =>
           ),
           Effect.retry({
             while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-            schedule: Schedule.exponential(Duration.seconds(1), 1.5).pipe(
-              Schedule.either(Schedule.spaced(Duration.seconds(15))),
-              Schedule.both(Schedule.recurs(60)),
-              Schedule.tapOutput(() =>
+            schedule: Schedule.max([
+              Schedule.min([
+                Schedule.exponential(Duration.seconds(1), 1.5),
+                Schedule.spaced(Duration.seconds(15)),
+              ]),
+              Schedule.recurs(60),
+            ]).pipe(
+              Schedule.tap(() =>
                 session.note(`Waiting for ServiceUsage operation ${operationName}…`),
               ),
             ),
@@ -143,6 +147,8 @@ export const ApiEnableProvider = () =>
       return {
         // No physical-name generation: identity is `(project, service)`.
         // Both are static strings on `news`/`olds`/`output`.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["project", "service", "name"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

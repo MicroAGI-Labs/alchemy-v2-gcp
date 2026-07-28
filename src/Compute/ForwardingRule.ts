@@ -182,6 +182,8 @@ export const ForwardingRuleProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "project", "region", "selfLink", "id"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -265,7 +267,7 @@ export const ForwardingRuleProvider = () =>
           });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteForwardingRules({
+          const deletion = deleteForwardingRules({
             project: output.project,
             region: output.region,
             forwardingRule: output.name,
@@ -275,6 +277,8 @@ export const ForwardingRuleProvider = () =>
                 ? awaitOp(output.project, output.region, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),

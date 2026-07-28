@@ -55,6 +55,8 @@ export const ProjectDefaultNetworkTierProvider = () =>
         );
 
       return {
+        nuke: { singleton: true },
+        list: () => Effect.succeed([]),
         stables: ["project"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

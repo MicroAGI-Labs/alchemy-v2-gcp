@@ -150,9 +150,10 @@ export const StorageBucketIamMemberProvider = () =>
         eff.pipe(
           Effect.retry({
             while: (e) => (e as { _tag?: string })?._tag !== "ConfigError",
-            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(2)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 
@@ -185,6 +186,8 @@ export const StorageBucketIamMemberProvider = () =>
 
       return {
         // Identity IS the tuple; all fields are static values.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["bucket", "role", "member", "condition"],
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

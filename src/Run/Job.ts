@@ -336,6 +336,8 @@ export const JobProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "uid", "resourceName", "project", "location"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -384,9 +386,11 @@ export const JobProvider = () =>
                   /enabled this API recently|has not been used/i.test(
                     e.message ?? "",
                   ),
-                schedule: Schedule.spaced(Duration.seconds(15)).pipe(
-                  Schedule.both(Schedule.recurs(20)),
-                  Schedule.tapOutput(() =>
+                schedule: Schedule.max([
+                  Schedule.spaced(Duration.seconds(15)),
+                  Schedule.recurs(20),
+                ]).pipe(
+                  Schedule.tap(() =>
                     session.note(
                       "Waiting for Cloud Run API enablement to propagate…",
                     ),

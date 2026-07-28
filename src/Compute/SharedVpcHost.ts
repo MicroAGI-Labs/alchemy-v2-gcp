@@ -75,6 +75,8 @@ export const SharedVpcHostProvider = () =>
         );
 
       return {
+        nuke: { singleton: true },
+        list: () => Effect.succeed([]),
         stables: ["project"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -104,12 +106,16 @@ export const SharedVpcHostProvider = () =>
           return { project: news.project, xpnProjectStatus: "HOST" };
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* disableXpnHostProjects({ project: output.project }).pipe(
+          const disabling = disableXpnHostProjects({
+            project: output.project,
+          }).pipe(
             Effect.flatMap((op) =>
               op.name
                 ? awaitOp(output.project, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* disabling.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
             // `BadRequest` is returned when:
             //   1. The project isn't a host (idempotent disable — fine).

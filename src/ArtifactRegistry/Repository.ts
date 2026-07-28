@@ -493,6 +493,8 @@ export const ArtifactRegistryRepositoryProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: [
           "name",
           "fullyQualifiedName",
@@ -561,9 +563,11 @@ export const ArtifactRegistryRepositoryProvider = () =>
                   /enabled this API recently|has not been used/i.test(
                     e.message ?? "",
                   ),
-                schedule: Schedule.spaced(Duration.seconds(15)).pipe(
-                  Schedule.both(Schedule.recurs(20)),
-                  Schedule.tapOutput(() =>
+                schedule: Schedule.max([
+                  Schedule.spaced(Duration.seconds(15)),
+                  Schedule.recurs(20),
+                ]).pipe(
+                  Schedule.tap(() =>
                     session.note(
                       "Waiting for Artifact Registry API enablement to propagate…",
                     ),

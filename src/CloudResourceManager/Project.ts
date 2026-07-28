@@ -242,9 +242,11 @@ export const ProjectProvider = () =>
           ),
           Effect.retry({
             while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-            schedule: Schedule.exponential(Duration.seconds(1), 1.5).pipe(
-              Schedule.both(Schedule.recurs(60)),
-              Schedule.tapOutput(() =>
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(1), 1.5),
+              Schedule.recurs(60),
+            ]).pipe(
+              Schedule.tap(() =>
                 session.note(`Waiting for GCP operation ${operationName}…`),
               ),
             ),
@@ -467,13 +469,16 @@ export const ProjectProvider = () =>
           });
         }).pipe(
           Effect.retry({
-            schedule: Schedule.exponential(Duration.seconds(2)).pipe(
-              Schedule.both(Schedule.recurs(8)),
-            ),
+            schedule: Schedule.max([
+              Schedule.exponential(Duration.seconds(2)),
+              Schedule.recurs(8),
+            ]),
           }),
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["projectId", "projectNumber", "name"],
         diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

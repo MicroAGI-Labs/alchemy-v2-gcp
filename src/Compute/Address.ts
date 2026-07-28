@@ -172,6 +172,8 @@ export const AddressProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "project", "region", "selfLink", "id", "address"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
@@ -250,7 +252,7 @@ export const AddressProvider = () =>
           });
         }),
         delete: Effect.fn(function* ({ output, session }) {
-          yield* deleteAddresses({
+          const deletion = deleteAddresses({
             project: output.project,
             region: output.region,
             address: output.name,
@@ -260,6 +262,8 @@ export const AddressProvider = () =>
                 ? awaitOp(output.project, output.region, op.name, session)
                 : Effect.succeed(op),
             ),
+          );
+          yield* deletion.pipe(
             Effect.catchTag("NotFound", () => Effect.void),
             // 400 "is being used by ..." comes back while a forwarding
             // rule still references the address. The rule must be

@@ -124,12 +124,16 @@ export const PsaConnectionProvider = () =>
           ),
           Effect.retry({
             while: (e: { _tag?: string }) => e?._tag === "OperationPending",
-            schedule: Schedule.exponential(Duration.seconds(2), 1.5).pipe(
-              Schedule.either(Schedule.spaced(Duration.seconds(15))),
+            schedule: Schedule.max([
+              Schedule.min([
+                Schedule.exponential(Duration.seconds(2), 1.5),
+                Schedule.spaced(Duration.seconds(15)),
+              ]),
               // PSA peering creates can take 5–10 min while the
               // service producer provisions its side. 80 × 15s ≈ 20 min.
-              Schedule.both(Schedule.recurs(80)),
-              Schedule.tapOutput(() =>
+              Schedule.recurs(80),
+            ]).pipe(
+              Schedule.tap(() =>
                 session.note(`Waiting for ServiceNetworking operation ${operationName}…`),
               ),
             ),
@@ -162,6 +166,8 @@ export const PsaConnectionProvider = () =>
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["network", "serviceName", "peering"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

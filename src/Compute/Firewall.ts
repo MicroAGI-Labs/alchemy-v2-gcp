@@ -199,6 +199,8 @@ export const FirewallProvider = () =>
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "project", "selfLink", "id", "network"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

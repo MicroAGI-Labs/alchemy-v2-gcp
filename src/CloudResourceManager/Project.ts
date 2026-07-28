@@ -477,6 +477,8 @@ export const ProjectProvider = () =>
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["projectId", "projectNumber", "name"],
         diff: Effect.fn(function* ({ id, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

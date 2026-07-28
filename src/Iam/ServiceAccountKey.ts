@@ -153,6 +153,8 @@ export const ServiceAccountKeyProvider = () =>
         // privateKeyData is stable: it's set on create and never
         // changes. The engine preserves it across reconciles and
         // does not use it for drift detection.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "privateKeyData", "keyAlgorithm", "keyType"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

@@ -311,6 +311,8 @@ export const StorageBucketProvider = () =>
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "id", "selfLink", "location", "timeCreated"],
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

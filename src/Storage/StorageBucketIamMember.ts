@@ -186,6 +186,8 @@ export const StorageBucketIamMemberProvider = () =>
 
       return {
         // Identity IS the tuple; all fields are static values.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["bucket", "role", "member", "condition"],
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

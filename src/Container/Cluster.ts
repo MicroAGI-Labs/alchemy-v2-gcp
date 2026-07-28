@@ -505,6 +505,8 @@ export const ClusterProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: [
           "name",
           "selfLink",

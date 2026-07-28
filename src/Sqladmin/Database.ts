@@ -126,6 +126,8 @@ export const SqlDatabaseProvider = () =>
         );
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "instance", "project", "selfLink"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

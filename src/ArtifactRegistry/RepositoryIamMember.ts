@@ -90,6 +90,8 @@ export const ArtifactRegistryRepositoryIamMemberProvider = () =>
         });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["repository", "role", "member"],
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;

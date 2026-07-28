@@ -147,6 +147,8 @@ export const ApiEnableProvider = () =>
       return {
         // No physical-name generation: identity is `(project, service)`.
         // Both are static strings on `news`/`olds`/`output`.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["project", "service", "name"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;

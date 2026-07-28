@@ -195,6 +195,8 @@ export const KubernetesSecretProvider = () =>
         // uid, and endpoint — which is a replace trigger, so it never changes
         // on update. caCertificate is intentionally excluded: it can rotate on
         // the same cluster.
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: ["name", "namespace", "endpoint", "uid"],
         diff: Effect.fn(function* ({ id, news, olds = {} }) {
           if (!isResolved(news)) return undefined;

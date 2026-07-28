@@ -179,6 +179,8 @@ export const KubernetesManifestProvider = () =>
         // Identity (apiVersion/kind/name/namespace) and the server-assigned uid
         // are unchanged by an in-place apply. endpoint is a replace trigger so
         // it never changes on update; caCertificate is excluded (can rotate).
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: [
           "apiVersion",
           "kind",

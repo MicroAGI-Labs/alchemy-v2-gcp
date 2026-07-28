@@ -493,6 +493,8 @@ export const ArtifactRegistryRepositoryProvider = () =>
       });
 
       return {
+        nuke: { skip: true },
+        list: () => Effect.succeed([]),
         stables: [
           "name",
           "fullyQualifiedName",

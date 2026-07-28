@@ -8,8 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Require Alchemy beta.63, Distilled 0.29.1, and Effect beta.97, and migrate
-  retry schedules and typed error handlers to their current Effect APIs.
+- Require Alchemy beta.65, Distilled 0.30.2, and Effect beta.100; migrate retry
+  schedules and typed error handlers to their current Effect APIs; and adopt
+  the required `Provider.list` contract. Account-wide nuke is conservatively
+  disabled until the provider has explicit project/location census scopes.
 
 ## 0.11.5 — 2026-07-22
 

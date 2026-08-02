@@ -4,6 +4,19 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.7 — 2026-08-02
+
+### Added
+
+- **`GCP.WorkloadIdentityPool`** and **`GCP.WorkloadIdentityPoolProvider`** —
+  keyless federation into GCP from an external OIDC issuer, so a workload
+  outside GCP (an EKS/AKS pod, a CI job) can impersonate a service account
+  with no service-account key anywhere in the system. The provider exposes an
+  `audience` attribute (`//iam.googleapis.com/{name}`) for use in a credential
+  configuration. Both resources undelete rather than fail when they find a
+  soft-deleted predecessor, since GCP holds a deleted pool's ID for ~30 days
+  and would otherwise block a re-deploy under the same name.
+
 ## 0.11.6 — 2026-07-28
 
 ### Changed

@@ -151,10 +151,37 @@ export const providerResourceName = (
   providerId: string,
 ) => `${poolResourceName(project, poolId)}/providers/${providerId}`;
 
-const deepEqualRecord = (
+/**
+ * Compare two claim mappings by CONTENT, not serialisation.
+ *
+ * `JSON.stringify` preserves key insertion order, and the order GCP returns
+ * these keys in need not match the order they were sent in. A raw stringify
+ * comparison therefore reports drift for two identical mappings and fires a
+ * patch LRO on every single deploy.
+ */
+const sameMapping = (
   a: Record<string, string> | undefined,
   b: Record<string, string> | undefined,
-) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
+) => {
+  const entries = (r: Record<string, string> | undefined) =>
+    Object.entries(r ?? {}).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+  return JSON.stringify(entries(a)) === JSON.stringify(entries(b));
+};
+
+/**
+ * Compare audience allow-lists as SETS.
+ *
+ * `allowedAudiences` is an allow-list: membership is what matters, order is
+ * not meaningful, and GCP is free to return it in any order. Comparing it
+ * positionally would make a reordering look like drift forever.
+ */
+const sameAudiences = (
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+) => {
+  const sorted = (v: readonly string[] | undefined) => [...(v ?? [])].sort();
+  return JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
+};
 
 /**
  * Treat absent and empty-string as the same value.
@@ -248,10 +275,10 @@ export const WorkloadIdentityPoolProviderProvider = () =>
           //
           // All three fields are part of the resource name; the API cannot
           // move a provider between pools or rename it.
-          const currentProject = output?.project ?? oldProps.project ?? news.project;
-          const currentPoolId = output?.poolId ?? oldProps.poolId ?? news.poolId;
+          const currentProject = output?.project || oldProps.project || news.project;
+          const currentPoolId = output?.poolId || oldProps.poolId || news.poolId;
           const currentProviderId =
-            output?.providerId ?? oldProps.providerId ?? news.providerId;
+            output?.providerId || oldProps.providerId || news.providerId;
           if (
             currentProject !== news.project ||
             currentPoolId !== news.poolId ||
@@ -261,9 +288,9 @@ export const WorkloadIdentityPoolProviderProvider = () =>
           }
         }),
         read: Effect.fn(function* ({ id, olds, output }) {
-          const project = output?.project ?? olds?.project;
-          const poolId = output?.poolId ?? olds?.poolId;
-          const providerId = output?.providerId ?? olds?.providerId;
+          const project = output?.project || olds?.project;
+          const poolId = output?.poolId || olds?.poolId;
+          const providerId = output?.providerId || olds?.providerId;
           if (!project || !poolId || !providerId) return undefined;
           const provider = yield* observeProvider(project, poolId, providerId);
           if (!provider) return undefined;
@@ -345,13 +372,12 @@ export const WorkloadIdentityPoolProviderProvider = () =>
               !sameText(provider.description, description) ||
               (provider.disabled ?? false) !== (news.disabled ?? false) ||
               !sameText(provider.attributeCondition, news.attributeCondition) ||
-              !deepEqualRecord(
-                provider.attributeMapping,
-                news.attributeMapping,
-              ) ||
+              !sameMapping(provider.attributeMapping, news.attributeMapping) ||
               !sameText(provider.oidc?.issuerUri, news.oidc.issuerUri) ||
-              JSON.stringify(provider.oidc?.allowedAudiences ?? []) !==
-                JSON.stringify(news.oidc.allowedAudiences ?? []) ||
+              !sameAudiences(
+                provider.oidc?.allowedAudiences,
+                news.oidc.allowedAudiences,
+              ) ||
               !sameText(provider.oidc?.jwksJson, news.oidc.jwksJson);
             if (needsPatch) {
               const op = yield* patchProvider({
@@ -376,9 +402,14 @@ export const WorkloadIdentityPoolProviderProvider = () =>
           // Props fallback for the same reason as the pool: incomplete
           // attributes must not turn destroy into a silent no-op that leaks a
           // soft-deleted-name-holding resource.
-          const project = output?.project ?? olds?.project;
-          const poolId = output?.poolId ?? olds?.poolId;
-          const providerId = output?.providerId ?? olds?.providerId;
+          // `||` not `??`: an empty string is never a valid identity here,
+          // and a persisted `""` must fall through to the next source rather
+          // than be taken as real. With `??` a corrupt/partial state entry
+          // would short-circuit the fallback and turn destroy into a silent
+          // no-op (or make diff replace a live resource).
+          const project = output?.project || olds?.project;
+          const poolId = output?.poolId || olds?.poolId;
+          const providerId = output?.providerId || olds?.providerId;
           if (!project || !poolId || !providerId) return;
           const op = yield* deleteProvider({
             name: providerResourceName(project, poolId, providerId),

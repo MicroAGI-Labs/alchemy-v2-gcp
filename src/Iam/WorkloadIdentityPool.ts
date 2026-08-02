@@ -195,15 +195,15 @@ export const WorkloadIdentityPoolResourceProvider = () =>
           // already correct. Both fields are part of the resource name, so a
           // genuine change here really is a replacement; the point is only to
           // avoid inventing one.
-          const currentProject = output?.project ?? oldProps.project ?? news.project;
-          const currentPoolId = output?.poolId ?? oldProps.poolId ?? news.poolId;
+          const currentProject = output?.project || oldProps.project || news.project;
+          const currentPoolId = output?.poolId || oldProps.poolId || news.poolId;
           if (currentProject !== news.project || currentPoolId !== news.poolId) {
             return { action: "replace" } as const;
           }
         }),
         read: Effect.fn(function* ({ id, olds, output }) {
-          const project = output?.project ?? olds?.project;
-          const poolId = output?.poolId ?? olds?.poolId;
+          const project = output?.project || olds?.project;
+          const poolId = output?.poolId || olds?.poolId;
           if (!project || !poolId) return undefined;
           const pool = yield* observePool(project, poolId);
           if (!pool) return undefined;
@@ -287,8 +287,13 @@ export const WorkloadIdentityPoolResourceProvider = () =>
           // props and no usable attributes; a no-op destroy would then LEAK
           // the pool — and because deletion is soft, the leaked pool holds
           // its ID for ~30 days, blocking a re-deploy under the same name.
-          const project = output?.project ?? olds?.project;
-          const poolId = output?.poolId ?? olds?.poolId;
+          // `||` not `??`: an empty string is never a valid identity here,
+          // and a persisted `""` must fall through to the next source rather
+          // than be taken as real. With `??` a corrupt/partial state entry
+          // would short-circuit the fallback and turn destroy into a silent
+          // no-op (or make diff replace a live resource).
+          const project = output?.project || olds?.project;
+          const poolId = output?.poolId || olds?.poolId;
           if (!project || !poolId) return;
           const op = yield* deletePool({
             name: poolResourceName(project, poolId),

@@ -156,6 +156,20 @@ const deepEqualRecord = (
   b: Record<string, string> | undefined,
 ) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
 
+/**
+ * Treat absent and empty-string as the same value.
+ *
+ * The patch below uses a FIXED `updateMask` while the request body omits
+ * unset optional fields — which is deliberate: under a field mask, an omitted
+ * field means "clear it", so dropping `displayName` from the props really
+ * should clear it on GCP. The hazard is only in the comparison afterwards. If
+ * GCP echoes a cleared field back as `""` rather than omitting it, a raw
+ * `!==` against `undefined` would report drift on every single deploy and
+ * churn a long-running patch operation forever.
+ */
+const sameText = (a: string | undefined, b: string | undefined) =>
+  (a ?? "") === (b ?? "");
+
 export const WorkloadIdentityPoolProviderProvider = () =>
   Provider.effect(
     WorkloadIdentityPoolProvider,
@@ -224,15 +238,24 @@ export const WorkloadIdentityPoolProviderProvider = () =>
 
       return {
         stables: ["name", "project", "poolId", "providerId", "audience"],
-        diff: Effect.fn(function* ({ olds = {}, news }) {
+        diff: Effect.fn(function* ({ olds = {}, news, output }) {
           if (!isResolved(news)) return undefined;
-          const oldProps = olds as WorkloadIdentityPoolProviderProps;
-          // All three are part of the resource name; the API cannot move a
-          // provider between pools or rename it.
+          const oldProps = olds as Partial<WorkloadIdentityPoolProviderProps>;
+          // Prefer live attributes over persisted props, and fall back to the
+          // DESIRED value when neither is known — see the equivalent comment
+          // in WorkloadIdentityPool.ts. Defaulting to `undefined` would make
+          // an adoption replace a live, correct provider.
+          //
+          // All three fields are part of the resource name; the API cannot
+          // move a provider between pools or rename it.
+          const currentProject = output?.project ?? oldProps.project ?? news.project;
+          const currentPoolId = output?.poolId ?? oldProps.poolId ?? news.poolId;
+          const currentProviderId =
+            output?.providerId ?? oldProps.providerId ?? news.providerId;
           if (
-            oldProps.project !== news.project ||
-            oldProps.poolId !== news.poolId ||
-            oldProps.providerId !== news.providerId
+            currentProject !== news.project ||
+            currentPoolId !== news.poolId ||
+            currentProviderId !== news.providerId
           ) {
             return { action: "replace" } as const;
           }
@@ -310,19 +333,18 @@ export const WorkloadIdentityPoolProviderProvider = () =>
             }
           } else {
             const needsPatch =
-              provider.displayName !== news.displayName ||
-              provider.description !== description ||
+              !sameText(provider.displayName, news.displayName) ||
+              !sameText(provider.description, description) ||
               (provider.disabled ?? false) !== (news.disabled ?? false) ||
-              provider.attributeCondition !== news.attributeCondition ||
+              !sameText(provider.attributeCondition, news.attributeCondition) ||
               !deepEqualRecord(
                 provider.attributeMapping,
                 news.attributeMapping,
               ) ||
-              provider.oidc?.issuerUri !== news.oidc.issuerUri ||
+              !sameText(provider.oidc?.issuerUri, news.oidc.issuerUri) ||
               JSON.stringify(provider.oidc?.allowedAudiences ?? []) !==
                 JSON.stringify(news.oidc.allowedAudiences ?? []) ||
-              (provider.oidc?.jwksJson ?? undefined) !==
-                (news.oidc.jwksJson ?? undefined);
+              !sameText(provider.oidc?.jwksJson, news.oidc.jwksJson);
             if (needsPatch) {
               const op = yield* patchProvider({
                 name: providerResourceName(project, poolId, providerId),
@@ -342,14 +364,16 @@ export const WorkloadIdentityPoolProviderProvider = () =>
           );
           return toAttrs(project, poolId, providerId, provider);
         }),
-        delete: Effect.fn(function* ({ output, session }) {
-          if (!output.project || !output.poolId || !output.providerId) return;
+        delete: Effect.fn(function* ({ olds, output, session }) {
+          // Props fallback for the same reason as the pool: incomplete
+          // attributes must not turn destroy into a silent no-op that leaks a
+          // soft-deleted-name-holding resource.
+          const project = output?.project ?? olds?.project;
+          const poolId = output?.poolId ?? olds?.poolId;
+          const providerId = output?.providerId ?? olds?.providerId;
+          if (!project || !poolId || !providerId) return;
           const op = yield* deleteProvider({
-            name: providerResourceName(
-              output.project,
-              output.poolId,
-              output.providerId,
-            ),
+            name: providerResourceName(project, poolId, providerId),
           }).pipe(
             Effect.catchTag("NotFound", () =>
               Effect.succeed({ name: undefined } as iam.Operation),

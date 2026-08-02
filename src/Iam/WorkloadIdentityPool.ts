@@ -108,6 +108,18 @@ export const WorkloadIdentityPool = Resource<WorkloadIdentityPool>(
   "GCP.WorkloadIdentityPool",
 );
 
+/**
+ * Treat absent and empty-string as the same value.
+ *
+ * The patch below uses a FIXED `updateMask` while the body omits unset
+ * optional fields — deliberately, since under a field mask an omitted field
+ * means "clear it". The hazard is the comparison: if GCP echoes a cleared
+ * field back as `""` rather than omitting it, a raw `!==` against `undefined`
+ * would report drift on every deploy and churn a patch LRO forever.
+ */
+const sameText = (a: string | undefined, b: string | undefined) =>
+  (a ?? "") === (b ?? "");
+
 /** `projects/{project}/locations/global` — the only supported location. */
 export const poolParent = (project: string) =>
   `projects/${project}/locations/global`;
@@ -171,14 +183,21 @@ export const WorkloadIdentityPoolResourceProvider = () =>
 
       return {
         stables: ["name", "project", "poolId"],
-        diff: Effect.fn(function* ({ olds = {}, news }) {
+        diff: Effect.fn(function* ({ olds = {}, news, output }) {
           if (!isResolved(news)) return undefined;
-          const oldProps = olds as WorkloadIdentityPoolProps;
-          // Both are part of the resource name, which the API cannot change.
-          if (
-            oldProps.project !== news.project ||
-            oldProps.poolId !== news.poolId
-          ) {
+          const oldProps = olds as Partial<WorkloadIdentityPoolProps>;
+          // Prefer live attributes over persisted props, and fall back to the
+          // DESIRED value when neither is known — mirroring Project.ts.
+          //
+          // Defaulting to `undefined` instead would make an adoption (output
+          // present, olds absent) compare `undefined !== news.project` and
+          // return `replace`, deleting and recreating a live pool that was
+          // already correct. Both fields are part of the resource name, so a
+          // genuine change here really is a replacement; the point is only to
+          // avoid inventing one.
+          const currentProject = output?.project ?? oldProps.project ?? news.project;
+          const currentPoolId = output?.poolId ?? oldProps.poolId ?? news.poolId;
+          if (currentProject !== news.project || currentPoolId !== news.poolId) {
             return { action: "replace" } as const;
           }
         }),
@@ -239,8 +258,8 @@ export const WorkloadIdentityPoolResourceProvider = () =>
             // Only the mutable fields, and only when they actually differ —
             // an unconditional patch would churn an LRO on every deploy.
             const needsPatch =
-              pool.displayName !== news.displayName ||
-              pool.description !== description ||
+              !sameText(pool.displayName, news.displayName) ||
+              !sameText(pool.description, description) ||
               (pool.disabled ?? false) !== (news.disabled ?? false);
             if (needsPatch) {
               const op = yield* patchPool({
@@ -256,10 +275,17 @@ export const WorkloadIdentityPoolResourceProvider = () =>
           yield* session.note(poolResourceName(project, poolId));
           return toAttrs(project, poolId, pool);
         }),
-        delete: Effect.fn(function* ({ output, session }) {
-          if (!output.project || !output.poolId) return;
+        delete: Effect.fn(function* ({ olds, output, session }) {
+          // Fall back to props when attributes are incomplete. A create whose
+          // LRO succeeded but whose follow-up read failed leaves state with
+          // props and no usable attributes; a no-op destroy would then LEAK
+          // the pool — and because deletion is soft, the leaked pool holds
+          // its ID for ~30 days, blocking a re-deploy under the same name.
+          const project = output?.project ?? olds?.project;
+          const poolId = output?.poolId ?? olds?.poolId;
+          if (!project || !poolId) return;
           const op = yield* deletePool({
-            name: poolResourceName(output.project, output.poolId),
+            name: poolResourceName(project, poolId),
           }).pipe(
             Effect.catchTag("NotFound", () =>
               Effect.succeed({ name: undefined } as iam.Operation),

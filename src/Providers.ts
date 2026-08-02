@@ -40,6 +40,14 @@ import {
   ServiceAccountKeyProvider,
 } from "./Iam/ServiceAccountKey.ts";
 import {
+  WorkloadIdentityPool,
+  WorkloadIdentityPoolResourceProvider,
+} from "./Iam/WorkloadIdentityPool.ts";
+import {
+  WorkloadIdentityPoolProvider,
+  WorkloadIdentityPoolProviderProvider,
+} from "./Iam/WorkloadIdentityPoolProvider.ts";
+import {
   HelmRelease,
   HelmReleaseProvider,
 } from "./Kubernetes/Helm.ts";
@@ -123,6 +131,8 @@ export const providers = () =>
       ArtifactRegistryRepositoryIamMember,
       ServiceAccount,
       ServiceAccountKey,
+      WorkloadIdentityPool,
+      WorkloadIdentityPoolProvider,
       KubernetesSecret,
       KubernetesManifest,
       HelmRelease,
@@ -156,6 +166,8 @@ export const providers = () =>
         ArtifactRegistryRepositoryIamMemberProvider(),
         ServiceAccountProvider(),
         ServiceAccountKeyProvider(),
+        WorkloadIdentityPoolResourceProvider(),
+        WorkloadIdentityPoolProviderProvider(),
         KubernetesSecretProvider(),
         KubernetesManifestProvider(),
         HelmReleaseProvider(),

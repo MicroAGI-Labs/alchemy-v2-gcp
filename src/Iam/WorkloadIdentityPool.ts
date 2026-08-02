@@ -218,10 +218,16 @@ export const WorkloadIdentityPoolResourceProvider = () =>
             id,
             news.description,
           );
+          // Body is TOTAL over the patch's updateMask below: every masked
+          // field is always present, with an explicit empty/default value
+          // when the prop is unset. Behaviourally identical to omitting them
+          // (a masked-but-absent field is cleared), but it states the intent
+          // in code rather than relying on that field-mask subtlety, so
+          // "clear displayName" cannot be misread as "leave it alone".
           const body: iam.WorkloadIdentityPool = {
-            ...(news.displayName ? { displayName: news.displayName } : {}),
+            displayName: news.displayName ?? "",
             description,
-            ...(news.disabled !== undefined ? { disabled: news.disabled } : {}),
+            disabled: news.disabled ?? false,
           };
 
           let pool = yield* observePool(project, poolId);

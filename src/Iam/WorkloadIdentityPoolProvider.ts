@@ -285,19 +285,27 @@ export const WorkloadIdentityPoolProviderProvider = () =>
             id,
             news.description,
           );
+          // Scalars are TOTAL over the updateMask below — always present,
+          // explicit empty/default when unset — so clearing is stated in code
+          // rather than implied by field-mask semantics.
+          //
+          // `attributeCondition` and `oidc.jwksJson` are the exception and
+          // stay conditional: both are validated formats (a CEL expression
+          // and a JWKS document), and sending "" risks a parse rejection
+          // where omission is unambiguous. They are still cleared correctly
+          // when unset — `oidc` is masked as a whole message, so the body's
+          // `oidc` replaces it outright.
           const body: iam.WorkloadIdentityPoolProvider = {
-            ...(news.displayName ? { displayName: news.displayName } : {}),
+            displayName: news.displayName ?? "",
             description,
-            ...(news.disabled !== undefined ? { disabled: news.disabled } : {}),
+            disabled: news.disabled ?? false,
             attributeMapping: news.attributeMapping,
             ...(news.attributeCondition
               ? { attributeCondition: news.attributeCondition }
               : {}),
             oidc: {
               issuerUri: news.oidc.issuerUri,
-              ...(news.oidc.allowedAudiences
-                ? { allowedAudiences: news.oidc.allowedAudiences }
-                : {}),
+              allowedAudiences: news.oidc.allowedAudiences ?? [],
               ...(news.oidc.jwksJson ? { jwksJson: news.oidc.jwksJson } : {}),
             },
           };

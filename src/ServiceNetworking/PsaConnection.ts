@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as sn from "@distilled.cloud/gcp/servicenetworking-v1";
+import * as sn from "@distilled.cloud/gcp/servicenetworking_v1";
 import { Resource } from "alchemy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { deepEqual, isResolved } from "alchemy/Diff";

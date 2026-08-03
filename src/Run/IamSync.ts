@@ -1,4 +1,4 @@
-import type * as run from "@distilled.cloud/gcp/run-v2";
+import type * as run from "@distilled.cloud/gcp/run_v2";
 import type { ResourceBinding } from "alchemy/Resource";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

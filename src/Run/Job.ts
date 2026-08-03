@@ -1,4 +1,4 @@
-import * as run from "@distilled.cloud/gcp/run-v2";
+import * as run from "@distilled.cloud/gcp/run_v2";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -10,7 +10,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type * as GCP from "../Providers.ts";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import { makeSyncIam, type RunIamBindingContract } from "./IamSync.ts";
 import { makeAwaitOperation } from "./Operations.ts";
 import {
@@ -34,7 +34,7 @@ import {
  * converge-to-desired-state model) and is left to user-side code:
  *
  * ```typescript
- * import * as run from "@distilled.cloud/gcp/run-v2";
+ * import * as run from "@distilled.cloud/gcp/run_v2";
  * const job = yield* GCP.Job("Nightly", { ... });
  * const runJob = yield* run.runProjectsLocationsJobs;
  * yield* runJob({
@@ -234,7 +234,7 @@ const toAttributes = (
   latestCreatedExecution: j.latestCreatedExecution,
   reconciling: j.reconciling,
   etag: j.etag,
-  labels: { ...(j.labels ?? {}) },
+  labels: normalizeStringMap(j.labels) ?? {},
   createTime: j.createTime,
   updateTime: j.updateTime,
 });
@@ -260,7 +260,7 @@ const jobMutated = (
   desiredLabels: Record<string, string>,
 ): boolean => {
   const labelDiff = diffTags(
-    { ...(observed.labels ?? {}) },
+    normalizeStringMap(observed.labels) ?? {},
     desiredLabels,
   );
   if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) return true;
@@ -448,7 +448,7 @@ export const JobProvider = () =>
           const observed = yield* observe(project, location, name);
           if (!observed) return undefined;
           const attrs = toAttributes(observed, { project, location, name });
-          return (yield* hasAlchemyLabels(id, observed.labels))
+          return (yield* hasAlchemyLabels(id, normalizeStringMap(observed.labels)))
             ? attrs
             : Unowned(attrs);
         }),

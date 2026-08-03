@@ -1,4 +1,4 @@
-import * as compute from "@distilled.cloud/gcp/compute-v1";
+import * as compute from "@distilled.cloud/gcp/compute_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -291,7 +291,7 @@ export const SubnetworkProvider = () =>
         );
         const desiredRanges = sortedSecondaryRanges(args.news.secondaryIpRanges);
         if (!deepEqual(obsRanges, desiredRanges)) {
-          body.secondaryIpRanges = desiredRanges as ReadonlyArray<compute.SubnetworkSecondaryRange>;
+          body.secondaryIpRanges = [...desiredRanges];
         }
         if (
           args.news.privateIpGoogleAccess !== undefined &&

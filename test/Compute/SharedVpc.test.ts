@@ -1,4 +1,4 @@
-import * as compute from "@distilled.cloud/gcp/compute-v1";
+import * as compute from "@distilled.cloud/gcp/compute_v1";
 import * as Test from "alchemy/Test/Bun";
 import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";

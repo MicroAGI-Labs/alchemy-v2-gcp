@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as storage from "@distilled.cloud/gcp/storage-v1";
+import * as storage from "@distilled.cloud/gcp/storage_v1";
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";

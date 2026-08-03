@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as iam from "@distilled.cloud/gcp/unstable/iam-v1";
+import * as iam from "@distilled.cloud/gcp/unstable/iam_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import { isResolved } from "alchemy/Diff";
@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import {
   descriptionHasAlchemyMarker,
   gcpAlchemyDescription,
+  normalizeStringMap,
   stripAlchemyMarker,
 } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
@@ -253,7 +254,7 @@ export const WorkloadIdentityPoolProviderProvider = () =>
           providerId,
           issuerUri: provider.oidc?.issuerUri,
           allowedAudiences: provider.oidc?.allowedAudiences,
-          attributeMapping: provider.attributeMapping,
+          attributeMapping: normalizeStringMap(provider.attributeMapping),
           attributeCondition: provider.attributeCondition,
           displayName: provider.displayName,
           description: stripAlchemyMarker(provider.description),
@@ -372,7 +373,10 @@ export const WorkloadIdentityPoolProviderProvider = () =>
               !sameText(provider.description, description) ||
               (provider.disabled ?? false) !== (news.disabled ?? false) ||
               !sameText(provider.attributeCondition, news.attributeCondition) ||
-              !sameMapping(provider.attributeMapping, news.attributeMapping) ||
+              !sameMapping(
+                normalizeStringMap(provider.attributeMapping),
+                news.attributeMapping,
+              ) ||
               !sameText(provider.oidc?.issuerUri, news.oidc.issuerUri) ||
               !sameAudiences(
                 provider.oidc?.allowedAudiences,

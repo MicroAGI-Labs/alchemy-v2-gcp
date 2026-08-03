@@ -49,7 +49,7 @@ The folder name under `src/` matches the GCP API surface (`cloudresourcemanager`
 The actual `Project` provider is at `src/CloudResourceManager/Project.ts`. Its shape:
 
 ```ts
-import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
+import * as crm from "@distilled.cloud/gcp/cloudresourcemanager_v3";
 import * as Effect from "effect/Effect";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy";

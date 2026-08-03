@@ -1,4 +1,4 @@
-import * as sql from "@distilled.cloud/gcp/sqladmin-v1";
+import * as sql from "@distilled.cloud/gcp/sqladmin_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import type * as GCP from "../Providers.ts";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import { makeAwaitOperation } from "./Operations.ts";
 import type {
   PostgresVersion,
@@ -289,7 +289,7 @@ const toAttributes = (
         }
       : undefined,
     settingsVersion: i.settings?.settingsVersion,
-    labels: { ...(i.settings?.userLabels ?? {}) },
+    labels: normalizeStringMap(i.settings?.userLabels) ?? {},
   };
 };
 
@@ -341,7 +341,7 @@ const toSettingsBody = (
       }
     : {}),
   ...(s.backupConfiguration ? { backupConfiguration: s.backupConfiguration } : {}),
-  ...(s.databaseFlags ? { databaseFlags: s.databaseFlags } : {}),
+  ...(s.databaseFlags ? { databaseFlags: [...s.databaseFlags] } : {}),
   ...(s.deletionProtectionEnabled !== undefined
     ? { deletionProtectionEnabled: s.deletionProtectionEnabled }
     : {}),
@@ -454,7 +454,7 @@ export const SqlInstanceProvider = () =>
         );
 
         const labelDiff = diffTags(
-          { ...(obsSettings.userLabels ?? {}) },
+          normalizeStringMap(obsSettings.userLabels) ?? {},
           args.desiredLabels,
         );
         if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) {
@@ -631,7 +631,10 @@ export const SqlInstanceProvider = () =>
             );
             for (const candidate of page?.items ?? []) {
               if (
-                yield* hasAlchemyLabels(id, candidate.settings?.userLabels)
+                yield* hasAlchemyLabels(
+                  id,
+                  normalizeStringMap(candidate.settings?.userLabels),
+                )
               ) {
                 observed = candidate;
                 break;
@@ -644,7 +647,10 @@ export const SqlInstanceProvider = () =>
             region,
             name: observed.name,
           });
-          return (yield* hasAlchemyLabels(id, observed.settings?.userLabels))
+          return (yield* hasAlchemyLabels(
+            id,
+            normalizeStringMap(observed.settings?.userLabels),
+          ))
             ? attrs
             : Unowned(attrs);
         }),

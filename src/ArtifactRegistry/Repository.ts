@@ -1,4 +1,4 @@
-import * as ar from "@distilled.cloud/gcp/artifactregistry-v1";
+import * as ar from "@distilled.cloud/gcp/artifactregistry_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -10,7 +10,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type * as GCP from "../Providers.ts";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import { makeAwaitOperation } from "./Operations.ts";
 import type { ArtifactRegistryFormat, ArtifactRegistryMode } from "./Types.ts";
 import {
@@ -399,7 +399,7 @@ const toAttributes = (
   sizeBytes: r.sizeBytes,
   satisfiesPzs: r.satisfiesPzs,
   satisfiesPzi: r.satisfiesPzi,
-  labels: { ...(r.labels ?? {}) },
+  labels: normalizeStringMap(r.labels) ?? {},
   createTime: r.createTime ?? "",
   updateTime: r.updateTime ?? "",
 });
@@ -441,7 +441,7 @@ export const ArtifactRegistryRepositoryProvider = () =>
         }
 
         const labelDiff = diffTags(
-          { ...(args.observed.labels ?? {}) },
+          normalizeStringMap(args.observed.labels) ?? {},
           args.desiredLabels,
         );
         if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) {
@@ -623,7 +623,7 @@ export const ArtifactRegistryRepositoryProvider = () =>
           const observed = yield* observe(project, location, name);
           if (!observed) return undefined;
           const attrs = toAttributes(observed, { project, location, name });
-          return (yield* hasAlchemyLabels(id, observed.labels))
+          return (yield* hasAlchemyLabels(id, normalizeStringMap(observed.labels)))
             ? attrs
             : Unowned(attrs);
         }),

@@ -1,4 +1,4 @@
-import * as compute from "@distilled.cloud/gcp/compute-v1";
+import * as compute from "@distilled.cloud/gcp/compute_v1";
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";

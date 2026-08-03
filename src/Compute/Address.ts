@@ -1,4 +1,4 @@
-import * as compute from "@distilled.cloud/gcp/compute-v1";
+import * as compute from "@distilled.cloud/gcp/compute_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -6,7 +6,7 @@ import { deepEqual, isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 import { makeAwaitRegionOperation } from "./Operations.ts";
 
@@ -125,7 +125,7 @@ const toAddressAttributes = (
   purpose: a.purpose,
   subnetwork: a.subnetwork,
   status: a.status,
-  labels: { ...(a.labels ?? {}) },
+  labels: normalizeStringMap(a.labels) ?? {},
 });
 
 export const AddressProvider = () =>
@@ -283,7 +283,7 @@ export const AddressProvider = () =>
           const observed = yield* observe(project, region, name);
           if (!observed) return undefined;
           const attrs = toAddressAttributes(observed, { project, region });
-          return (yield* hasAlchemyLabels(id, observed.labels))
+          return (yield* hasAlchemyLabels(id, normalizeStringMap(observed.labels)))
             ? attrs
             : Unowned(attrs);
         }),

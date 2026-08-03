@@ -1,4 +1,4 @@
-import * as ar from "@distilled.cloud/gcp/artifactregistry-v1";
+import * as ar from "@distilled.cloud/gcp/artifactregistry_v1";
 import * as GCP from "@microagi/alchemy-gcp";
 import * as Output from "alchemy/Output";
 import * as Test from "alchemy/Test/Bun";

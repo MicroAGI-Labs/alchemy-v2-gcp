@@ -1,4 +1,4 @@
-import * as sql from "@distilled.cloud/gcp/sqladmin-v1";
+import * as sql from "@distilled.cloud/gcp/sqladmin_v1";
 import * as Test from "alchemy/Test/Bun";
 import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";

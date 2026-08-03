@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as lustre from "@distilled.cloud/gcp/lustre-v1";
+import * as lustre from "@distilled.cloud/gcp/lustre_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -11,7 +11,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type { NetworkRefById } from "../Compute/Network.ts";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 
 /**
@@ -221,7 +221,7 @@ const toAttributes = (
   perUnitStorageThroughput: i.perUnitStorageThroughput,
   gkeSupportEnabled: i.gkeSupportEnabled,
   kmsKey: i.kmsKey,
-  labels: { ...(i.labels ?? {}) },
+  labels: normalizeStringMap(i.labels) ?? {},
 });
 
 export const ManagedLustreInstanceProvider = () =>
@@ -295,7 +295,7 @@ export const ManagedLustreInstanceProvider = () =>
         if ((args.observed.description ?? undefined) !== args.desired.description) {
           updateMaskFields.push("description");
         }
-        const observedLabels = { ...(args.observed.labels ?? {}) };
+        const observedLabels = normalizeStringMap(args.observed.labels) ?? {};
         const labelDiff = diffTags(observedLabels, args.desired.labels);
         if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) {
           updateMaskFields.push("labels");
@@ -434,7 +434,7 @@ export const ManagedLustreInstanceProvider = () =>
               ),
             );
             for (const candidate of page?.instances ?? []) {
-              if (yield* hasAlchemyLabels(id, candidate.labels)) {
+              if (yield* hasAlchemyLabels(id, normalizeStringMap(candidate.labels))) {
                 observed = candidate;
                 break;
               }
@@ -450,7 +450,7 @@ export const ManagedLustreInstanceProvider = () =>
             instanceId,
             network,
           });
-          return (yield* hasAlchemyLabels(id, observed.labels))
+          return (yield* hasAlchemyLabels(id, normalizeStringMap(observed.labels)))
             ? attrs
             : Unowned(attrs);
         }),

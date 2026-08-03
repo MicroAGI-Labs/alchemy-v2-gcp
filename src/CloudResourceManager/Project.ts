@@ -1,6 +1,6 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as billing from "@distilled.cloud/gcp/cloudbilling-v1";
-import * as crm from "@distilled.cloud/gcp/cloudresourcemanager-v3";
+import * as billing from "@distilled.cloud/gcp/cloudbilling_v1";
+import * as crm from "@distilled.cloud/gcp/cloudresourcemanager_v3";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -11,7 +11,7 @@ import { diffTags } from "alchemy/Tags";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 
 /**
@@ -205,7 +205,7 @@ const toAttributes = (
   state: p.state ?? "ACTIVE",
   parent: p.parent ?? "",
   createTime: p.createTime,
-  labels: { ...(p.labels ?? {}) },
+  labels: normalizeStringMap(p.labels) ?? {},
   // GCP returns `billingAccountName` as a plain string but its format
   // is always `billingAccounts/{id}` — narrow at the boundary.
   billingAccount: (billingInfo?.billingAccountName || undefined) as
@@ -387,7 +387,7 @@ export const ProjectProvider = () =>
         desired: { displayName: string | undefined; labels: Record<string, string> },
         session: ScopedPlanStatusSession,
       ) {
-        const observedLabels = { ...(observed.labels ?? {}) };
+        const observedLabels = normalizeStringMap(observed.labels) ?? {};
         const updateMaskFields: string[] = [];
         if (desired.displayName !== observed.displayName) {
           updateMaskFields.push("display_name");
@@ -601,7 +601,7 @@ export const ProjectProvider = () =>
           // created outside this stack/stage/id. The engine surfaces
           // `Unowned(attrs)` to the user as "exists but is not ours" —
           // adoption requires `--adopt` (or `adopt(true)`).
-          return (yield* hasAlchemyLabels(id, observed.labels))
+          return (yield* hasAlchemyLabels(id, normalizeStringMap(observed.labels)))
             ? attrs
             : Unowned(attrs);
         }),

@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import type * as iam from "@distilled.cloud/gcp/unstable/iam-v1";
+import type * as iam from "@distilled.cloud/gcp/unstable/iam_v1";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

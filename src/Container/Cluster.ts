@@ -1,4 +1,4 @@
-import * as cont from "@distilled.cloud/gcp/container-v1";
+import * as cont from "@distilled.cloud/gcp/container_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -8,7 +8,7 @@ import * as Provider from "alchemy/Provider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 import { type NodePoolProps, toNodeConfigCreateBody } from "./NodePool.ts";
 import { makeAwaitOperation, qualifyOperationName } from "./Operations.ts";
@@ -297,7 +297,7 @@ const toInitialNodePoolBody = (
 ): cont.NodePool => ({
   name: spec.name,
   initialNodeCount: spec.initialNodeCount,
-  ...(spec.nodeLocations ? { locations: spec.nodeLocations } : {}),
+  ...(spec.nodeLocations ? { locations: [...spec.nodeLocations] } : {}),
   config: toNodeConfigCreateBody(spec.config, {
     ...(spec.config.resourceLabels ?? {}),
     ...clusterInternalLabels,
@@ -320,7 +320,7 @@ const toClusterAttributes = (
   currentMasterVersion: c.currentMasterVersion,
   status: c.status,
   releaseChannel: c.releaseChannel,
-  resourceLabels: { ...(c.resourceLabels ?? {}) },
+  resourceLabels: normalizeStringMap(c.resourceLabels) ?? {},
 });
 
 export const ClusterProvider = () =>
@@ -412,7 +412,7 @@ export const ClusterProvider = () =>
         if (deepEqual(args.observed.locations ?? [], args.news.nodeLocations)) return;
         const op = yield* setLocations({
           name: args.fqName,
-          body: { locations: args.news.nodeLocations },
+          body: { locations: [...args.news.nodeLocations] },
         });
         if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
@@ -587,7 +587,7 @@ export const ClusterProvider = () =>
                   ...(news.initialClusterVersion
                     ? { initialClusterVersion: news.initialClusterVersion }
                     : {}),
-                  ...(news.nodeLocations ? { locations: news.nodeLocations } : {}),
+                  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
                   resourceLabels: desiredLabels,
                   nodePools: [initialPoolBody],
                 },
@@ -667,7 +667,10 @@ export const ClusterProvider = () =>
           );
           if (!observed) return undefined;
           const attrs = toClusterAttributes(observed, { project, location });
-          return (yield* hasAlchemyLabels(id, observed.resourceLabels))
+          return (yield* hasAlchemyLabels(
+            id,
+            normalizeStringMap(observed.resourceLabels),
+          ))
             ? attrs
             : Unowned(attrs);
         }),

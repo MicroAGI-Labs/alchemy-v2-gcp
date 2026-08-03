@@ -1,4 +1,4 @@
-import * as cont from "@distilled.cloud/gcp/container-v1";
+import * as cont from "@distilled.cloud/gcp/container_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
@@ -6,7 +6,7 @@ import { deepEqual, isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
-import { gcpInternalLabels, hasAlchemyLabels } from "../Tags.ts";
+import { gcpInternalLabels, hasAlchemyLabels, normalizeStringMap } from "../Tags.ts";
 import type * as GCP from "../Providers.ts";
 import { makeAwaitOperation, qualifyOperationName } from "./Operations.ts";
 
@@ -262,7 +262,7 @@ export const nodePoolSizeNeedsSync = (
  */
 const toAcceleratorConfig = (
   accelerators: NodePoolProps["config"]["accelerators"] | undefined,
-): ReadonlyArray<cont.AcceleratorConfig> | undefined =>
+): cont.AcceleratorConfig[] | undefined =>
   accelerators?.map((a) => ({
     acceleratorType: a.type,
     acceleratorCount: String(a.count),
@@ -293,19 +293,30 @@ export const toNodeConfigCreateBody = (
     ...(config.imageType ? { imageType: config.imageType } : {}),
     ...(accelerators ? { accelerators } : {}),
     ...(config.serviceAccount ? { serviceAccount: config.serviceAccount } : {}),
-    ...(config.oauthScopes ? { oauthScopes: config.oauthScopes } : {}),
-    ...(config.taints ? { taints: config.taints } : {}),
+    ...(config.oauthScopes ? { oauthScopes: [...config.oauthScopes] } : {}),
+    ...(config.taints ? { taints: [...config.taints] } : {}),
     ...(config.labels ? { labels: config.labels } : {}),
     resourceLabels: desiredResourceLabels,
     ...(config.metadata ? { metadata: config.metadata } : {}),
-    ...(config.tags ? { tags: config.tags } : {}),
+    ...(config.tags ? { tags: [...config.tags] } : {}),
     ...(config.minCpuPlatform ? { minCpuPlatform: config.minCpuPlatform } : {}),
     ...(config.bootDiskKmsKey ? { bootDiskKmsKey: config.bootDiskKmsKey } : {}),
     ...(config.sandboxConfig ? { sandboxConfig: config.sandboxConfig } : {}),
     ...(config.preemptible !== undefined ? { preemptible: config.preemptible } : {}),
     ...(config.spot !== undefined ? { spot: config.spot } : {}),
     ...(config.reservationAffinity
-      ? { reservationAffinity: config.reservationAffinity }
+      ? {
+          reservationAffinity: {
+            consumeReservationType:
+              config.reservationAffinity.consumeReservationType,
+            ...(config.reservationAffinity.key
+              ? { key: config.reservationAffinity.key }
+              : {}),
+            ...(config.reservationAffinity.values
+              ? { values: [...config.reservationAffinity.values] }
+              : {}),
+          },
+        }
       : {}),
     ...(config.shieldedInstanceConfig
       ? { shieldedInstanceConfig: config.shieldedInstanceConfig }
@@ -371,13 +382,13 @@ const toNodePoolUpdateBody = (
   }
 
   if (nc.tags && !deepEqual(oc.tags ?? [], nc.tags)) {
-    body.tags = { tags: nc.tags };
+    body.tags = { tags: [...nc.tags] };
   }
   if (nc.labels && !deepEqual(oc.labels ?? {}, nc.labels)) {
     body.labels = { labels: nc.labels };
   }
   if (nc.taints && !deepEqual(oc.taints ?? [], nc.taints)) {
-    body.taints = { taints: nc.taints };
+    body.taints = { taints: [...nc.taints] };
   }
   // GKE injects its own `goog-*` resource labels (accelerator type,
   // provisioning model, …) after create. Treat them as server-managed:
@@ -529,7 +540,7 @@ export const NodePoolProvider = () =>
         ) {
           const op = yield* updateNodePools({
             name: args.fqName,
-            body: { locations: args.news.nodeLocations },
+            body: { locations: [...args.news.nodeLocations] },
           });
           if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
         }
@@ -627,7 +638,7 @@ export const NodePoolProvider = () =>
                 nodePool: {
                   name: desiredName,
                   initialNodeCount: createNodeCount,
-                  ...(news.nodeLocations ? { locations: news.nodeLocations } : {}),
+                  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
                   config,
                   ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
                   ...(news.management ? { management: news.management } : {}),
@@ -707,7 +718,10 @@ export const NodePoolProvider = () =>
             );
             for (const candidate of page?.nodePools ?? []) {
               if (
-                yield* hasAlchemyLabels(id, candidate.config?.resourceLabels)
+                yield* hasAlchemyLabels(
+                  id,
+                  normalizeStringMap(candidate.config?.resourceLabels),
+                )
               ) {
                 observed = candidate;
                 break;
@@ -720,7 +734,10 @@ export const NodePoolProvider = () =>
             location,
             clusterName,
           });
-          return (yield* hasAlchemyLabels(id, observed.config?.resourceLabels))
+          return (yield* hasAlchemyLabels(
+            id,
+            normalizeStringMap(observed.config?.resourceLabels),
+          ))
             ? attrs
             : Unowned(attrs);
         }),

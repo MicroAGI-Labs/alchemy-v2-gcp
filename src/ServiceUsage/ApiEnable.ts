@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as su from "@distilled.cloud/gcp/serviceusage-v1";
+import * as su from "@distilled.cloud/gcp/serviceusage_v1";
 import { Resource } from "alchemy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
 import { isResolved } from "alchemy/Diff";

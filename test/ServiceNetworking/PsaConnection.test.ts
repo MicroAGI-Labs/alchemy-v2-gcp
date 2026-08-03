@@ -1,4 +1,4 @@
-import * as sn from "@distilled.cloud/gcp/servicenetworking-v1";
+import * as sn from "@distilled.cloud/gcp/servicenetworking_v1";
 import * as Test from "alchemy/Test/Bun";
 import * as GCP from "@microagi/alchemy-gcp";
 import { expect } from "bun:test";

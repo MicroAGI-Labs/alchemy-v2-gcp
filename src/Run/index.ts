@@ -1,4 +1,4 @@
-import type * as run from "@distilled.cloud/gcp/run-v2";
+import type * as run from "@distilled.cloud/gcp/run_v2";
 
 export { Job, JobProvider } from "./Job.ts";
 export type { JobAttributes, JobProps } from "./Job.ts";
@@ -9,7 +9,7 @@ export type { ServiceAttributes, ServiceProps } from "./Service.ts";
 
 /**
  * Clean aliases for the most commonly-used Cloud Run v2 SDK types,
- * re-exported from `@distilled.cloud/gcp/run-v2` so consumers don't
+ * re-exported from `@distilled.cloud/gcp/run_v2` so consumers don't
  * need to import from the underlying SDK directly. The aliases are
  * type-only — they share identity with the distilled types, so values
  * are interchangeable.

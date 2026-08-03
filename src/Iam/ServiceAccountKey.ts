@@ -1,5 +1,5 @@
 import { ConfigError } from "@distilled.cloud/gcp";
-import * as iam from "@distilled.cloud/gcp/unstable/iam-v1";
+import * as iam from "@distilled.cloud/gcp/unstable/iam_v1";
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";

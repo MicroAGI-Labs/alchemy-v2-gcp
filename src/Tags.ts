@@ -28,6 +28,18 @@ const sanitizeLabelValue = (raw: string): string => {
   return replaced.slice(0, 63);
 };
 
+/** Normalize an SDK string map by omitting absent values at the boundary. */
+export const normalizeStringMap = (
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string> | undefined =>
+  value === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(value).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
+
 /**
  * Compute the alchemy-internal label set for a Resource. Merge the
  * result with user-provided labels (user wins on key collision is

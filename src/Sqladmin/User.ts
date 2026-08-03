@@ -1,4 +1,4 @@
-import * as sql from "@distilled.cloud/gcp/sqladmin-v1";
+import * as sql from "@distilled.cloud/gcp/sqladmin_v1";
 import { Resource } from "alchemy";
 import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";

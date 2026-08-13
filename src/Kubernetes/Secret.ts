@@ -123,7 +123,10 @@ type SecretObject = {
     namespace?: string;
     uid?: string;
     resourceVersion?: string;
-    labels?: Record<string, string>;
+    // Distilled's generated `…ObjectMetaLabelsMap` index signature includes
+    // `undefined`, so the observed object is only assignable to this local
+    // subset if we mirror that.
+    labels?: Record<string, string | undefined>;
   };
   type?: string;
 };

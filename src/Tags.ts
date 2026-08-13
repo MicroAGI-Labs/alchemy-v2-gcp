@@ -62,7 +62,10 @@ export const gcpInternalLabels = Effect.fnUntraced(function* (id: string) {
  */
 export const hasAlchemyLabels = Effect.fnUntraced(function* (
   id: string,
-  labels: Record<string, string> | undefined,
+  // Distilled's generated Kubernetes/GCP map types have index signatures that
+  // include `undefined` (`{ [k: string]: string | undefined }`), so accept the
+  // wider shape — the equality checks below are unaffected.
+  labels: Record<string, string | undefined> | undefined,
 ) {
   if (!labels) return false;
   const expected = yield* gcpInternalLabels(id);

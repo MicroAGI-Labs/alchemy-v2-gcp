@@ -394,10 +394,24 @@ export const ClusterProvider = () =>
         session: ScopedPlanStatusSession;
       }) {
         if (!args.news.maintenancePolicy) return;
-        if (deepEqual(args.observed.maintenancePolicy, args.news.maintenancePolicy)) return;
+        // `resourceVersion` is an optimistic-concurrency token the API stamps
+        // on the policy; desired state never carries one, so compare without
+        // it. Including it made every diff unequal and re-patched forever.
+        const { resourceVersion, ...observedPolicy } =
+          args.observed.maintenancePolicy ?? {};
+        if (deepEqual(observedPolicy, args.news.maintenancePolicy)) return;
         const op = yield* setMaintenance({
           name: args.fqName,
-          body: { maintenancePolicy: args.news.maintenancePolicy },
+          body: {
+            maintenancePolicy: {
+              ...args.news.maintenancePolicy,
+              // GKE REQUIRES the current resourceVersion echoed back — exactly
+              // like labelFingerprint on setResourceLabels above. Omitting it
+              // fails with "Patch request's maintenancePolicy.resourceVersion
+              // is not equal to the current maintenancePolicy.resourceVersion".
+              resourceVersion,
+            },
+          },
         });
         if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });

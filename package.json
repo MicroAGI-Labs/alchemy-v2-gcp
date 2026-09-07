@@ -1,6 +1,6 @@
 {
   "name": "@microagi/alchemy-gcp",
-  "version": "0.11.7",
+  "version": "0.11.8",
   "description": "GCP provider for Alchemy v2 (Effect-based IaC). Resources for Project, ServiceAccount, Cluster, NodePool, Compute, ManagedLustre, ServiceUsage, ServiceNetworking, Cloud Run (Service + Job + IAM), Cloud SQL (Instance + Database + User with IAM database authn), Artifact Registry (Docker repositories, standard + remote pull-through caches), Kubernetes (typed Secret + generic SSA Manifest + Helm release), with ADC-backed credentials and target-side IAM bindings.",
   "keywords": [
     "alchemy",
@@ -53,10 +53,10 @@
     "google-auth-library": "^10.4.0"
   },
   "peerDependencies": {
-    "@distilled.cloud/gcp": ">=0.30.2",
-    "@distilled.cloud/kubernetes": ">=0.30.2",
-    "alchemy": ">=2.0.0-beta.65",
-    "effect": ">=4.0.0-beta.100 || >=4.0.0"
+    "@distilled.cloud/gcp": ">=1.0.0-rc.4",
+    "@distilled.cloud/kubernetes": ">=1.0.0-rc.4",
+    "alchemy": ">=2.0.0-beta.72",
+    "effect": ">=4.0.0-beta.105 || >=4.0.0"
   },
   "devDependencies": {
     "@distilled.cloud/gcp": "workspace:*",
@@ -64,7 +64,7 @@
     "@types/bun": "latest",
     "@types/node": "latest",
     "alchemy": "workspace:*",
-    "effect": ">=4.0.0-beta.100 || >=4.0.0",
+    "effect": ">=4.0.0-beta.105 || >=4.0.0",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

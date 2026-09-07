@@ -4,6 +4,21 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.8 — 2026-09-07
+
+### Changed
+
+- Require Distilled GCP and Kubernetes SDKs `>=1.0.0-rc.4`, matching the
+  rewritten SDK exports used by this release. Require Alchemy beta.72 and
+  Effect beta.105 or newer to match the validated runtime.
+
+### Fixed
+
+- Reconcile GKE maintenance policies using the latest resource version, ignore
+  server-maintained policy fields, and avoid rewriting matching policies.
+- Support the rewritten Distilled GCP SDK operation factories and service
+  exports, including optional response values and label-map index signatures.
+
 ## 0.11.7 — 2026-08-02
 
 ### Added

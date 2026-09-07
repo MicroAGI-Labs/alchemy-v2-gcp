@@ -323,6 +323,22 @@ const toClusterAttributes = (
   resourceLabels: normalizeStringMap(c.resourceLabels) ?? {},
 });
 
+/** Ignore server bookkeeping when diffing; carry its concurrency token on writes. */
+export const clusterMaintenancePolicyUpdate = (
+  observed: cont.MaintenancePolicy | undefined,
+  desired: ClusterProps["maintenancePolicy"],
+): cont.MaintenancePolicy | undefined => {
+  if (!desired) return undefined;
+  const { resourceVersion, ...current } = observed ?? {};
+  // Daily window duration is computed by GKE and cannot be configured.
+  if (current.window?.dailyMaintenanceWindow) {
+    const { duration: _, ...daily } = current.window.dailyMaintenanceWindow;
+    current.window = { ...current.window, dailyMaintenanceWindow: daily };
+  }
+  if (deepEqual(current, desired)) return undefined;
+  return { ...desired, ...(resourceVersion ? { resourceVersion } : {}) };
+};
+
 export const ClusterProvider = () =>
   Provider.effect(
     Cluster,
@@ -389,29 +405,21 @@ export const ClusterProvider = () =>
 
       const syncClusterMaintenance = Effect.fn(function* (args: {
         fqName: string;
-        observed: cont.Cluster;
         news: ClusterProps;
         session: ScopedPlanStatusSession;
       }) {
         if (!args.news.maintenancePolicy) return;
-        // `resourceVersion` is an optimistic-concurrency token the API stamps
-        // on the policy; desired state never carries one, so compare without
-        // it. Including it made every diff unequal and re-patched forever.
-        const { resourceVersion, ...observedPolicy } =
-          args.observed.maintenancePolicy ?? {};
-        if (deepEqual(observedPolicy, args.news.maintenancePolicy)) return;
+        // Earlier sync steps can update the cluster. Read immediately before
+        // setting the policy to obtain its current optimistic-concurrency token.
+        const current = yield* getClusters({ name: args.fqName });
+        const maintenancePolicy = clusterMaintenancePolicyUpdate(
+          current.maintenancePolicy,
+          args.news.maintenancePolicy,
+        );
+        if (!maintenancePolicy) return;
         const op = yield* setMaintenance({
           name: args.fqName,
-          body: {
-            maintenancePolicy: {
-              ...args.news.maintenancePolicy,
-              // GKE REQUIRES the current resourceVersion echoed back — exactly
-              // like labelFingerprint on setResourceLabels above. Omitting it
-              // fails with "Patch request's maintenancePolicy.resourceVersion
-              // is not equal to the current maintenancePolicy.resourceVersion".
-              resourceVersion,
-            },
-          },
+          body: { maintenancePolicy },
         });
         if (op.name) yield* awaitOperation(qualifyOp(args.fqName, op.name), args.session);
       });
@@ -642,7 +650,7 @@ export const ClusterProvider = () =>
             session,
           });
           yield* syncClusterAddons({ fqName, observed, news, session });
-          yield* syncClusterMaintenance({ fqName, observed, news, session });
+          yield* syncClusterMaintenance({ fqName, news, session });
           yield* syncClusterLocations({ fqName, observed, news, session });
           yield* syncClusterNetworkPolicy({ fqName, observed, news, session });
           yield* syncClusterLogging({ fqName, observed, news, session });

@@ -53,6 +53,24 @@ export type NodePoolProps = {
    * "do not combine with other fields" warning.
    */
   nodeLocations?: ReadonlyArray<string>;
+  /**
+   * Placement policy for accelerator topology. The named Compute resource
+   * policy must be in the pool's project and region. Immutable: change the
+   * pool name when changing this configuration on an explicitly named pool.
+   */
+  placementPolicy?: {
+    type?: "COMPACT";
+    policyName?: string;
+  };
+  /**
+   * GKE-managed accelerator networking (DRANET). Requires a supported machine
+   * type/version and Dataplane V2. Immutable; GKE owns the resulting NICs and
+   * networks. Set the networking DRA driver node label separately as required
+   * by GKE. Do not combine with legacy multi-network device attachment.
+   */
+  networkConfig?: {
+    acceleratorNetworkProfile?: "auto";
+  };
   /** Node configuration (machine, disk, accelerators, taints, labels, …). */
   config: {
     /** GCE machine type, e.g. `n2-standard-4`. Mutable via `update`. */
@@ -195,6 +213,10 @@ export type NodePoolAttributes = {
   status: string | undefined;
   /** Managed instance group URLs backing the pool. */
   instanceGroupUrls: ReadonlyArray<string>;
+  /** Observed placement policy; refreshed by read to detect topology drift. */
+  placementPolicy?: { type?: string; policyName?: string };
+  /** Only the managed profile is exposed, not GKE-generated network details. */
+  networkConfig?: { acceleratorNetworkProfile?: string };
 };
 
 /**
@@ -434,7 +456,7 @@ const toNodePoolUpdateBody = (
   return Object.keys(body).length === 0 ? undefined : body;
 };
 
-const toNodePoolAttributes = (
+export const toNodePoolAttributes = (
   pool: cont.NodePool,
   parent: { project: string; location: string; clusterName: string },
 ): NodePoolAttributes => ({
@@ -446,6 +468,66 @@ const toNodePoolAttributes = (
   version: pool.version,
   status: pool.status,
   instanceGroupUrls: pool.instanceGroupUrls ?? [],
+  ...(pool.placementPolicy ? { placementPolicy: pool.placementPolicy } : {}),
+  ...(pool.networkConfig?.acceleratorNetworkProfile ? {
+    networkConfig: { acceleratorNetworkProfile: pool.networkConfig.acceleratorNetworkProfile },
+  } : {}),
+});
+
+const normalizedPlacement = (policy: { type?: string; policyName?: string } | undefined) => ({
+  type: policy?.type === "TYPE_UNSPECIFIED" ? undefined : policy?.type,
+  policyName: policy?.policyName || undefined,
+});
+
+/** Compare only explicitly managed topology, not GKE-generated NICs/subnets. */
+export const nodePoolTopologyDrift = (
+  observed: Pick<cont.NodePool, "placementPolicy" | "networkConfig">,
+  news: NodePoolProps,
+): string[] => [
+  ...(news.placementPolicy !== undefined && !deepEqual(
+    normalizedPlacement(observed.placementPolicy), normalizedPlacement(news.placementPolicy),
+  ) ? ["placementPolicy"] : []),
+  ...(news.networkConfig !== undefined &&
+    (observed.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig.acceleratorNetworkProfile
+    ? ["networkConfig.acceleratorNetworkProfile"] : []),
+];
+
+/** Never replace a physical pool by adopting its own still-live predecessor. */
+export const diffNodePoolTopology = Effect.fn(function* (
+  olds: Partial<NodePoolProps>,
+  news: NodePoolProps,
+  output?: NodePoolAttributes,
+) {
+  if (!olds.config) return undefined;
+  const changed = !deepEqual(normalizedPlacement(olds.placementPolicy), normalizedPlacement(news.placementPolicy)) ||
+    (olds.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig?.acceleratorNetworkProfile ||
+    (output !== undefined && nodePoolTopologyDrift(output, news).length > 0);
+  if (!changed) return undefined;
+  if (news.name !== undefined && news.name === olds.name &&
+    news.project === olds.project && news.location === olds.location && news.clusterName === olds.clusterName) {
+    return yield* Effect.fail(new Error(
+      "NodePool: placementPolicy and acceleratorNetworkProfile are immutable. " +
+      "Choose a new pool name to replace an explicitly named pool safely.",
+    ));
+  }
+  return { action: "replace" } as const;
+});
+
+/** Complete create payload, shared with unit tests to verify API field nesting. */
+export const toNodePoolCreateBody = (
+  news: NodePoolProps,
+  name: string,
+  resourceLabels: Record<string, string>,
+): cont.NodePool => ({
+  name,
+  initialNodeCount: news.initialNodeCount ?? news.autoscaling?.minNodeCount ?? 1,
+  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
+  config: toNodeConfigCreateBody(news.config, resourceLabels),
+  ...(news.placementPolicy ? { placementPolicy: news.placementPolicy } : {}),
+  ...(news.networkConfig ? { networkConfig: news.networkConfig } : {}),
+  ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
+  ...(news.management ? { management: news.management } : {}),
+  ...(news.upgradeSettings ? { upgradeSettings: news.upgradeSettings } : {}),
 });
 
 export const NodePoolProvider = () =>
@@ -560,7 +642,7 @@ export const NodePoolProvider = () =>
         nuke: { skip: true },
         list: () => Effect.succeed([]),
         stables: ["name", "selfLink", "project", "location", "clusterName"],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
           if (
             somePropsAreDifferent(olds as NodePoolProps, news, [
@@ -572,6 +654,8 @@ export const NodePoolProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
+          const topologyDiff = yield* diffNodePoolTopology(olds, news, output);
+          if (topologyDiff) return topologyDiff;
           const oc = olds.config ?? ({} as NodePoolProps["config"]);
           const nc = news.config;
           if (
@@ -626,24 +710,10 @@ export const NodePoolProvider = () =>
           //    creates and state-persistence races; fall through and
           //    re-observe.
           if (!observed) {
-            const config = toNodeConfigCreateBody(news.config, desiredResourceLabels);
-            // GKE Standard rejects creates without a positive node
-            // count. If the user didn't specify, fall back to the
-            // autoscaler floor (or 1 if there's no autoscaler config).
-            const createNodeCount =
-              news.initialNodeCount ?? news.autoscaling?.minNodeCount ?? 1;
             const op = yield* createNodePools({
               parent: clusterPath,
               body: {
-                nodePool: {
-                  name: desiredName,
-                  initialNodeCount: createNodeCount,
-                  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
-                  config,
-                  ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
-                  ...(news.management ? { management: news.management } : {}),
-                  ...(news.upgradeSettings ? { upgradeSettings: news.upgradeSettings } : {}),
-                },
+                nodePool: toNodePoolCreateBody(news, desiredName, desiredResourceLabels),
               },
             }).pipe(
               Effect.catchTag("Conflict", () =>
@@ -652,6 +722,15 @@ export const NodePoolProvider = () =>
             );
             if (op?.name) yield* awaitOperation(qualifyOp(fqName, op.name), session);
             observed = yield* getNodePools({ name: fqName });
+          }
+
+          // An existing explicit name (including a concurrent create) cannot
+          // be repaired by updating immutable topology. Fail before mutations.
+          if (nodePoolTopologyDrift(observed, news).length > 0) {
+            return yield* Effect.fail(new Error(
+              "NodePool: existing pool has incompatible immutable placement or accelerator networking. " +
+              "Choose a new pool name instead of reusing the existing pool.",
+            ));
           }
 
           // 3. Sync — sequential, each aspect independently idempotent.

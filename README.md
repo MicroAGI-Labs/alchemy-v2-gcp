@@ -155,6 +155,28 @@ const batch = yield* GCP.Job("ProcessBatch", {
 
 Clean type aliases are re-exported from the top level so consumers don't need to import from `@distilled.cloud/gcp` directly: `GCP.RevisionTemplate`, `GCP.Container`, `GCP.TrafficTarget`, `GCP.VpcAccess`, `GCP.NodeSelector`, etc.
 
+## Reserved accelerator pools
+
+`NodePool.placementPolicy` accepts a regional Compute policy name and compact
+placement. `NodePool.networkConfig.acceleratorNetworkProfile: "auto"` delegates
+accelerator NIC/VPC creation to GKE. These are immutable pool settings; changing
+them on an explicitly named pool requires a new pool name. A mismatched live
+pool fails before any resize or configuration update. GKE version, GPU model,
+Dataplane V2 and networking-driver labels must meet Google's prerequisites.
+
+`ResourcePolicy` currently supports the `HIGH_THROUGHPUT` / `1x72` workload
+policy used by GB200. It owns only the regional policy. Changes to immutable
+policy settings require a new policy name.
+
+`ReservationShareProject` manages one consumer on an existing
+`SPECIFIC_PROJECTS` reservation. Specify owner `project`, `zone`, `reservation`,
+`consumerProjectId` and numeric `consumerProjectNumber`. The numeric ID is used
+in the field-level sharing update; both aliases are accepted when observing
+API responses. This resource never creates, resizes or deletes the reservation
+or CUD. A preexisting grant is retained on teardown; a grant added by the
+resource is removed without changing other consumers. State-loss recovery
+conservatively retains grants whose ownership can no longer be established.
+
 ## Adoption
 
 `read` is gated on the alchemy internal labels `alchemy_app` / `alchemy_stage` / `alchemy_id`. Existing GCP resources lacking those labels are returned `Unowned` — the engine refuses to take them over without explicit `--adopt` (or `adopt(true)` on the resource call).

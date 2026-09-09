@@ -14,11 +14,15 @@ const fixture = (preexisting = false) => {
     } },
   };
   const updates: compute.UpdateReservationsRequest[] = [];
+  const reads: compute.GetReservationsRequest[] = [];
   let operationReads = 0;
   let operationError = false;
   let forbidden = false;
   const provider = reservationShareProjectLifecycle({
-    get: ((() => forbidden ? Effect.fail({ _tag: "Forbidden", message: "denied" }) : live ? Effect.succeed(structuredClone(live)) : Effect.fail({ _tag: "NotFound" })) as unknown) as Parameters<typeof reservationShareProjectLifecycle>[0]["get"],
+    get: (((request: compute.GetReservationsRequest) => Effect.suspend(() => {
+      reads.push(request);
+      return forbidden ? Effect.fail({ _tag: "Forbidden", message: "denied" }) : live ? Effect.succeed(structuredClone(live)) : Effect.fail({ _tag: "NotFound" });
+    })) as unknown) as Parameters<typeof reservationShareProjectLifecycle>[0]["get"],
     update: (((request: compute.UpdateReservationsRequest) => Effect.sync(() => {
       updates.push(request);
       const number = props.consumerProjectNumber;
@@ -31,7 +35,7 @@ const fixture = (preexisting = false) => {
       return { status: "DONE", ...(operationError ? { error: { errors: [{ message: "operation failed" }] } } : {}) };
     })) as unknown) as Parameters<typeof reservationShareProjectLifecycle>[0]["getOperation"],
   });
-  return { provider, updates, live: () => live, disappear: () => { live = undefined; }, deny: () => { forbidden = true; }, failOperation: () => { operationError = true; }, operationReads: () => operationReads };
+  return { provider, updates, reads, live: () => live, disappear: () => { live = undefined; }, deny: () => { forbidden = true; }, failOperation: () => { operationError = true; }, operationReads: () => operationReads };
 };
 const reconcile = (f: ReturnType<typeof fixture>, previous?: ReservationShareProjectAttributes) => Effect.runPromise(f.provider.reconcile({ ...base, news: props, olds: previous ? props : undefined, output: previous }));
 const remove = (f: ReturnType<typeof fixture>, previous: ReservationShareProjectAttributes) => Effect.runPromise(f.provider.delete({ ...base, olds: props, output: previous }));
@@ -87,6 +91,38 @@ describe("existing reservation consumer grant", () => {
     const f = fixture();
     expect(await Effect.runPromise(f.provider.diff!({ ...base, news: { ...props, consumerProjectNumber: "222" }, olds: props, output: output(true), oldBindings: [], newBindings: [] }))).toEqual({ action: "replace" });
     expect(await Effect.runPromise(f.provider.diff!({ ...base, news: { ...props, consumerProjectId: "other-consumer" }, olds: props, output: output(true), oldBindings: [], newBindings: [] }))).toEqual({ action: "replace" });
+  });
+  test("surviving attributes detect every identity change without old props or API calls", async () => {
+    const f = fixture(true);
+    for (const key of ["project", "zone", "reservation", "consumerProjectNumber", "consumerProjectId"] as const) {
+      const news = { ...props, [key]: key === "consumerProjectNumber" ? "222" : "different" };
+      expect(await Effect.runPromise(f.provider.diff!({ ...base, news, olds: undefined as never, output: output(true), oldBindings: [], newBindings: [] }))).toEqual({ action: "replace" });
+    }
+    expect(f.reads).toEqual([]);
+    expect(f.updates).toEqual([]);
+  });
+  test("blank attributes fall back to old identity for diff, read, and owned-grant deletion", async () => {
+    const f = fixture(true);
+    const sparse = { ...output(true), project: "", zone: "", reservation: "", consumerProjectNumber: "", consumerProjectId: "" };
+    expect(await Effect.runPromise(f.provider.diff!({ ...base, news: { ...props, consumerProjectNumber: "222" }, olds: props, output: sparse, oldBindings: [], newBindings: [] }))).toEqual({ action: "replace" });
+    expect(await Effect.runPromise(f.provider.read!({ ...base, olds: props, output: sparse }))).toMatchObject({ ...props, createdMembership: true });
+    await remove(f, sparse);
+    expect(f.reads).toEqual(Array(2).fill({ project: "owner", zone: "us-east1-d", reservation: "cud-gb200" }));
+    expect(f.updates).toEqual([{ project: "owner", zone: "us-east1-d", reservation: "cud-gb200", paths: ["shareSettings.projectMap.123456789"], body: { name: "cud-gb200" } }]);
+  });
+  test("populated attributes win over stale props and incomplete identity never reaches the API", async () => {
+    const f = fixture(true);
+    const stale = { ...props, project: "wrong-project", consumerProjectNumber: "999" };
+    expect(await Effect.runPromise(f.provider.diff!({ ...base, news: props, olds: stale, output: output(true), oldBindings: [], newBindings: [] }))).toBeUndefined();
+    await Effect.runPromise(f.provider.delete({ ...base, olds: stale, output: output(true) }));
+    expect(f.updates[0]).toMatchObject({ project: "owner", paths: ["shareSettings.projectMap.123456789"] });
+    const before = f.reads.length;
+    for (const incomplete of [undefined, { ...output(true), reservation: "" }]) {
+      expect(await Effect.runPromise(f.provider.read!({ ...base, olds: undefined as never, output: incomplete }))).toBeUndefined();
+      await Effect.runPromise(f.provider.delete({ ...base, olds: undefined as never, output: incomplete as never }));
+    }
+    expect(f.reads).toHaveLength(before);
+    expect(f.updates).toHaveLength(1);
   });
   test("cannot convert a local reservation, recreate a missing reservation, or accept nonnumeric removal keys", async () => {
     const f = fixture();

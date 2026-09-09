@@ -1,7 +1,7 @@
 import { ConfigError } from "@distilled.cloud/gcp";
 import * as compute from "@distilled.cloud/gcp/compute_v1";
 import { Resource } from "alchemy";
-import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
+import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
@@ -30,6 +30,19 @@ export type ReservationShareProjectAttributes = ReservationShareProjectProps & {
 };
 export type ReservationShareProject = Resource<"GCP.ReservationShareProject", ReservationShareProjectProps, ReservationShareProjectAttributes, never, GCP.Providers>;
 export const ReservationShareProject = Resource<ReservationShareProject>("GCP.ReservationShareProject");
+
+const identityKeys = ["project", "zone", "reservation", "consumerProjectNumber", "consumerProjectId"] as const;
+// Recovery can retain attributes without props, or retain props alongside sparse
+// attributes. A populated observed identity always wins over the old declaration.
+const priorIdentity = (olds?: Partial<ReservationShareProjectProps>, output?: Partial<ReservationShareProjectAttributes>) => ({
+  project: output?.project || olds?.project,
+  zone: output?.zone || olds?.zone,
+  reservation: output?.reservation || olds?.reservation,
+  consumerProjectNumber: output?.consumerProjectNumber || olds?.consumerProjectNumber,
+  consumerProjectId: output?.consumerProjectId || olds?.consumerProjectId,
+});
+const completeIdentity = (props: ReturnType<typeof priorIdentity>): props is ReservationShareProjectProps =>
+  identityKeys.every((key) => !!props[key]);
 
 type Api = {
   get: Effect.Success<typeof compute.getReservations>;
@@ -81,7 +94,8 @@ export const reservationShareProjectLifecycle = (api: Api): Provider.ProviderSer
     diff: Effect.fn(function* ({ news, olds, output }) {
       if (!isResolved(news)) return undefined;
       yield* validate(news);
-      if (olds && somePropsAreDifferent(olds, news, ["project", "zone", "reservation", "consumerProjectNumber", "consumerProjectId"])) return { action: "replace" } as const;
+      const prior = priorIdentity(olds, output);
+      if (identityKeys.some((key) => prior[key] && prior[key] !== news[key])) return { action: "replace" } as const;
       if (!output) return undefined;
       const observed = yield* observe(news);
       return observed && reservationHasConsumer(observed, news) ? undefined : { action: "update" } as const;
@@ -100,8 +114,8 @@ export const reservationShareProjectLifecycle = (api: Api): Provider.ProviderSer
       return attrs(news, output?.createdMembership === true || !present);
     }),
     read: Effect.fn(function* ({ olds, output }) {
-      const props = output ?? olds;
-      if (!props) return undefined;
+      const props = priorIdentity(olds, output);
+      if (!completeIdentity(props)) return undefined;
       yield* validate(props);
       const observed = yield* observe(props);
       if (!observed || !reservationHasConsumer(observed, props)) return undefined;
@@ -109,10 +123,13 @@ export const reservationShareProjectLifecycle = (api: Api): Provider.ProviderSer
       // deliberately non-destructive, including state-loss recovery/adoption.
       return attrs(props, output?.createdMembership ?? false);
     }),
-    delete: Effect.fn(function* ({ output }) {
-      if (!output.createdMembership) return;
-      const observed = yield* observe(output);
-      if (observed && reservationHasConsumer(observed, output)) yield* change(output, false);
+    delete: Effect.fn(function* ({ olds, output }) {
+      if (output?.createdMembership !== true) return;
+      const props = priorIdentity(olds, output);
+      if (!completeIdentity(props)) return;
+      yield* validate(props);
+      const observed = yield* observe(props);
+      if (observed && reservationHasConsumer(observed, props)) yield* change(props, false);
     }),
   };
 };

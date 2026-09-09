@@ -475,7 +475,9 @@ export const toNodePoolAttributes = (
 });
 
 const normalizedPlacement = (policy: { type?: string; policyName?: string } | undefined) => ({
-  type: policy?.type === "TYPE_UNSPECIFIED" ? undefined : policy?.type,
+  // A named custom policy determines placement; tolerate sparse API responses
+  // that omit its redundant type while preserving unnamed policy comparisons.
+  type: policy?.policyName || policy?.type === "TYPE_UNSPECIFIED" ? undefined : policy?.type,
   policyName: policy?.policyName || undefined,
 });
 

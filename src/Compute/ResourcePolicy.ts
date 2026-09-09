@@ -37,6 +37,15 @@ export type ResourcePolicyAttributes = {
 export type ResourcePolicy = Resource<"GCP.ResourcePolicy", ResourcePolicyProps, ResourcePolicyAttributes, never, GCP.Providers>;
 export const ResourcePolicy = Resource<ResourcePolicy>("GCP.ResourcePolicy");
 
+const identityKeys = ["project", "region", "name"] as const;
+const priorIdentity = (olds?: Partial<ResourcePolicyProps>, output?: Partial<ResourcePolicyAttributes>) => ({
+  project: output?.project || olds?.project,
+  region: output?.region || olds?.region,
+  name: output?.name || olds?.name,
+});
+const completeIdentity = (props: ReturnType<typeof priorIdentity>): props is Pick<ResourcePolicyProps, typeof identityKeys[number]> =>
+  identityKeys.every((key) => !!props[key]);
+
 /** Ignore API-defaulted fields we do not manage, such as acceleratorTopologyMode. */
 export const resourcePolicyMatches = (observed: compute.ResourcePolicy, desired: ResourcePolicyProps) =>
   observed.workloadPolicy?.type === desired.workloadPolicy.type &&
@@ -71,7 +80,8 @@ export const ResourcePolicyProvider = () => Provider.effect(ResourcePolicy, Effe
     stables: ["project", "region", "name", "selfLink", "id"],
     diff: Effect.fn(function* ({ news, olds, output }) {
       if (!isResolved(news)) return undefined;
-      if (olds && somePropsAreDifferent(olds, news, ["project", "region", "name"])) return { action: "replace" } as const;
+      const prior = priorIdentity(olds, output);
+      if (identityKeys.some((key) => prior[key] && prior[key] !== news[key])) return { action: "replace" } as const;
       // Never replace the same physical policy, even if somebody already made
       // the desired change remotely: replacement GC would delete that policy.
       if (olds?.workloadPolicy && (!deepEqual(olds.workloadPolicy, news.workloadPolicy) || (olds.description ?? "") !== (news.description ?? ""))) return yield* immutableChangeError(news.name);
@@ -95,16 +105,18 @@ export const ResourcePolicyProvider = () => Provider.effect(ResourcePolicy, Effe
       return attrs(observed, news);
     }),
     read: Effect.fn(function* ({ id, olds, output }) {
-      const props = output ?? olds;
-      if (!props) return undefined;
+      const props = priorIdentity(olds, output);
+      if (!completeIdentity(props)) return undefined;
       const observed = yield* observe(props);
       if (!observed) return undefined;
       const result = attrs(observed, props);
       return (yield* descriptionHasAlchemyMarker(id, observed.description)) ? result : Unowned(result);
     }),
-    delete: Effect.fn(function* ({ output, session }) {
-      yield* remove({ project: output.project, region: output.region, resourcePolicy: output.name }).pipe(
-        Effect.flatMap((op) => complete(op, output, session)),
+    delete: Effect.fn(function* ({ olds, output, session }) {
+      const props = priorIdentity(olds, output);
+      if (!completeIdentity(props)) return;
+      yield* remove({ project: props.project, region: props.region, resourcePolicy: props.name }).pipe(
+        Effect.flatMap((op) => complete(op, props, session)),
         Effect.catchTag("NotFound", () => Effect.void),
       );
     }),

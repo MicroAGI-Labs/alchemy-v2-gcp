@@ -20,6 +20,52 @@ describe("GB200 workload policy comparison", () => {
     expect(resourcePolicyMatches({ workloadPolicy: desired.workloadPolicy, description: "changed" }, desired)).toBe(false);
   });
 
+  test("recovery uses surviving identity and never reads or deletes an incomplete address", async () => {
+    const requests: { method: string; url: string }[] = [];
+    const client = HttpClient.make((request) => Effect.sync(() => {
+      requests.push({ method: request.method, url: request.url });
+      return HttpClientResponse.fromWeb(request, Response.json(request.method === "DELETE" ? { status: "DONE" } : {
+        name: desired.name, workloadPolicy: desired.workloadPolicy,
+        description: "[alchemy:app=policy-test,stage=test,id=policy]",
+      }));
+    }));
+    const program = Effect.gen(function* () {
+      const provider = yield* Provider.Provider<ResourcePolicy>(ResourcePolicy.Type);
+      const output = { ...desired, id: "123", selfLink: "policy-link", description: undefined };
+      const base = { id: "policy", session: { note: () => Effect.void } };
+      const diff = { ...base, news: desired, olds: undefined, output } as unknown as Parameters<NonNullable<typeof provider.diff>>[0];
+      for (const key of ["project", "region", "name"] as const) {
+        expect(yield* provider.diff!({ ...diff, news: { ...desired, [key]: "different" } })).toEqual({ action: "replace" });
+      }
+      expect(requests).toEqual([]);
+      const blank = { ...output, project: "", region: "", name: "" };
+      expect(yield* provider.diff!({ ...diff, olds: desired, output: blank, news: { ...desired, name: "different" } })).toEqual({ action: "replace" });
+      expect(yield* provider.read!({ ...base, olds: desired, output: blank } as never)).toMatchObject({ project: "consumer", region: "us-east1", name: "gb200-placement" });
+      yield* provider.delete({ ...base, olds: desired, output: blank } as never);
+      // Attributes identify the actual old resource even if recovered props differ.
+      const stale = { ...desired, project: "wrong-project" };
+      expect(yield* provider.diff!({ ...diff, olds: stale })).toBeUndefined();
+      yield* provider.delete({ ...base, olds: stale, output } as never);
+      yield* provider.delete({ ...base, olds: undefined, output } as never);
+      yield* provider.delete({ ...base, olds: desired, output: undefined } as never);
+      expect(requests.map(({ method }) => method)).toEqual(["GET", "DELETE", "GET", "DELETE", "DELETE", "DELETE"]);
+      expect(requests.every(({ url }) => url.endsWith("/projects/consumer/regions/us-east1/resourcePolicies/gb200-placement"))).toBe(true);
+      const before = requests.length;
+      for (const incomplete of [undefined, ...["project", "region", "name"].map((key) => ({ ...output, [key]: "" }))]) {
+        expect(yield* provider.read!({ ...base, olds: undefined, output: incomplete } as never)).toBeUndefined();
+        yield* provider.delete({ ...base, olds: undefined, output: incomplete } as never);
+      }
+      expect(requests).toHaveLength(before);
+    }).pipe(
+      Effect.provide(ResourcePolicyProvider()),
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provideService(Credentials, Effect.succeed({ accessToken: Redacted.make("unit-test-only") })),
+      Effect.provideService(Stage, "test"),
+      Effect.provideService(Stack, { name: "policy-test", stage: "test" } as Stack["Service"]),
+    );
+    await Effect.runPromise(program as Effect.Effect<void>);
+  });
+
   test("real HTTP-backed provider creates, observes, detects drift, and prevents same-name replacement", async () => {
     let live: compute.ResourcePolicy | undefined;
     const mutations: string[] = [];

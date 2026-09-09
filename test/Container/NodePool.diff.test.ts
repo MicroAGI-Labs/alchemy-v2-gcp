@@ -109,6 +109,16 @@ describe("NodePool accelerator topology", () => {
     ))).toEqual({ action: "replace" });
   });
 
+  test("named policy identity tolerates sparse type responses while unnamed placement remains strict", async () => {
+    const sparse = { ...gb200, placementPolicy: { policyName: "gb200-nvl72" } };
+    expect(nodePoolTopologyDrift(sparse, gb200)).toEqual([]);
+    expect(await Effect.runPromise(diffNodePoolTopology(gb200, sparse))).toBeUndefined();
+    expect(nodePoolTopologyDrift({ ...sparse, placementPolicy: { policyName: "other" } }, gb200)).toEqual(["placementPolicy"]);
+    const unnamed = { ...gb200, placementPolicy: { type: "COMPACT" as const } };
+    expect(nodePoolTopologyDrift({ ...unnamed, placementPolicy: {} }, unnamed)).toEqual(["placementPolicy"]);
+    await expect(Effect.runPromise(diffNodePoolTopology(unnamed, { ...unnamed, placementPolicy: undefined }))).rejects.toThrow("Choose a new pool name");
+  });
+
   test("live immutable drift is detected even when declared props are unchanged", async () => {
     const attrs = toNodePoolAttributes({ name: gb200.name, placementPolicy: gb200.placementPolicy }, gb200);
     expect(nodePoolTopologyDrift(attrs, gb200)).toEqual(["networkConfig.acceleratorNetworkProfile"]);
@@ -126,6 +136,8 @@ describe("NodePool accelerator topology", () => {
         expect(request.body._tag).toBe("Uint8Array");
         if (request.body._tag !== "Uint8Array") throw new Error("Unexpected request body");
         observed = JSON.parse(new TextDecoder().decode(request.body.body)).nodePool;
+        // Exercise a sparse named-policy response through the actual reconciler.
+        delete observed!.placementPolicy!.type;
         return HttpClientResponse.fromWeb(request, Response.json({}));
       }
       expect(request.method).toBe("GET");
@@ -138,13 +150,13 @@ describe("NodePool accelerator topology", () => {
       const input = { id: "gpu", news: gb200 } as Parameters<typeof provider.reconcile>[0];
       const created = yield* provider.reconcile(input);
       expect(created.networkConfig).toEqual(gb200.networkConfig);
-      expect(created.placementPolicy).toEqual(gb200.placementPolicy);
+      expect(created.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(methods.filter((method) => method !== "GET")).toEqual(["POST"]);
       methods.length = 0;
       yield* provider.reconcile(input);
       expect(methods.every((method) => method === "GET")).toBe(true);
       const read = yield* provider.read!({ id: "gpu", olds: gb200, output: created } as never);
-      expect(read?.placementPolicy).toEqual(gb200.placementPolicy);
+      expect(read?.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(read?.networkConfig).toEqual(gb200.networkConfig);
       observed = { ...observed, networkConfig: undefined };
       methods.length = 0;

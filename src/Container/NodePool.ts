@@ -215,6 +215,8 @@ export type NodePoolAttributes = {
   status: string | undefined;
   /** Managed instance group URLs backing the pool. */
   instanceGroupUrls: ReadonlyArray<string>;
+  /** Observed immutable config needed to validate interrupted-create recovery. */
+  config?: { reservationAffinity?: cont.ReservationAffinity };
   /** Observed placement policy; refreshed by read to detect topology drift. */
   placementPolicy?: { type?: string; policyName?: string };
   /** Observed topology and primary-subnet context for resolving bare NIC names. */
@@ -474,6 +476,7 @@ export const toNodePoolAttributes = (
   version: pool.version,
   status: pool.status,
   instanceGroupUrls: pool.instanceGroupUrls ?? [],
+  ...(pool.config ? { config: { reservationAffinity: pool.config.reservationAffinity } } : {}),
   ...(pool.placementPolicy ? { placementPolicy: pool.placementPolicy } : {}),
   ...(pool.networkConfig ? {
     networkConfig: {
@@ -546,6 +549,21 @@ const validateNodeNetworks = (news: NodePoolProps) =>
   news.networkConfig?.acceleratorNetworkProfile && news.networkConfig.additionalNodeNetworkConfigs?.length
     ? Effect.fail(new Error("NodePool: automatic accelerator networking and explicit additional node networks are mutually exclusive"))
     : Effect.void;
+
+const normalizedReservationAffinity = (affinity: cont.ReservationAffinity | NodePoolProps["config"]["reservationAffinity"] | undefined) =>
+  affinity ? {
+    consumeReservationType: affinity.consumeReservationType,
+    key: affinity.key || undefined,
+    values: (affinity.values ?? []).map((value) => computeResourcePath(value)),
+  } : undefined;
+const reservationAffinityMatches = (observed: cont.ReservationAffinity | undefined, news: NodePoolProps) =>
+  deepEqual(normalizedReservationAffinity(observed), normalizedReservationAffinity(news.config.reservationAffinity));
+const reservationAffinityError = () => new Error(
+  "NodePool: cannot recover or change immutable reservationAffinity without matching live reservation evidence. Choose a new pool name for an actual affinity change.",
+);
+const incompleteReservationAffinity = (affinity: NodePoolProps["config"]["reservationAffinity"]) =>
+  affinity?.consumeReservationType === "SPECIFIC_RESERVATION" &&
+  (!affinity.key || !affinity.values?.length || affinity.values.some((value) => typeof value !== "string" || !value));
 
 /** Never replace a physical pool by adopting its own still-live predecessor. */
 export const diffNodePoolTopology = Effect.fn(function* (
@@ -724,6 +742,19 @@ export const NodePoolProvider = () =>
           if (topologyDiff?.action === "replace") return topologyDiff;
           const oc = olds.config ?? ({} as NodePoolProps["config"]);
           const nc = news.config;
+          const affinityChanged = !deepEqual(oc.reservationAffinity, nc.reservationAffinity);
+          let recoveredAffinity = false;
+          if (affinityChanged && incompleteReservationAffinity(oc.reservationAffinity)) {
+            // Failed create state can contain [null] where an unresolved Output
+            // was stripped. Only a fresh, matching same-pool observation may
+            // replace that missing evidence; never interpret it as a new pool.
+            if (!output || output.name !== news.name || output.project !== news.project ||
+              output.location !== news.location || output.clusterName !== news.clusterName ||
+              !output.config?.reservationAffinity || !reservationAffinityMatches(output.config.reservationAffinity, news)) {
+              return yield* Effect.fail(reservationAffinityError());
+            }
+            recoveredAffinity = true;
+          }
           if (
             somePropsAreDifferent(oc, nc, [
               "serviceAccount",
@@ -740,7 +771,7 @@ export const NodePoolProvider = () =>
             !deepEqual(oc.oauthScopes, nc.oauthScopes) ||
             !deepEqual(oc.metadata, nc.metadata) ||
             !deepEqual(oc.sandboxConfig, nc.sandboxConfig) ||
-            !deepEqual(oc.reservationAffinity, nc.reservationAffinity) ||
+            (affinityChanged && !recoveredAffinity) ||
             !deepEqual(oc.shieldedInstanceConfig, nc.shieldedInstanceConfig) ||
             !deepEqual(oc.localNvmeSsdBlockConfig, nc.localNvmeSsdBlockConfig) ||
             !deepEqual(
@@ -750,7 +781,7 @@ export const NodePoolProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
-          return topologyDiff;
+          return topologyDiff ?? (recoveredAffinity ? { action: "update" } as const : undefined);
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           yield* validateNodeNetworks(news);
@@ -789,6 +820,11 @@ export const NodePoolProvider = () =>
             );
             if (op?.name) yield* awaitOperation(qualifyOp(fqName, op.name), session);
             observed = yield* getNodePools({ name: fqName });
+          }
+
+          if (news.config.reservationAffinity !== undefined &&
+            !reservationAffinityMatches(observed.config?.reservationAffinity, news)) {
+            return yield* Effect.fail(reservationAffinityError());
           }
 
           // An existing explicit name (including a concurrent create) cannot

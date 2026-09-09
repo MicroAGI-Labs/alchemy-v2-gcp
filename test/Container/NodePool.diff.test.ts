@@ -242,6 +242,22 @@ describe("NodePool accelerator topology", () => {
           ...desired, config: { ...desired.config, serviceAccount: "different-service-account" },
         }, output: created } as never)).toEqual({ action: "replace" });
       }
+      const interruptedOld = { ...gb200, config: { ...gb200.config, reservationAffinity: {
+        ...gb200.config.reservationAffinity!, values: [null],
+      } } } as unknown as NodePoolProps;
+      expect(created.config?.reservationAffinity?.values).toEqual([...(desired.config.reservationAffinity?.values ?? [])]);
+      // Exact persisted failure: null was serialized for an unresolved reservation Output.
+      expect(yield* provider.diff!({ id: "gpu", olds: interruptedOld, news: desired, output: created } as never)).toEqual({ action: "update" });
+      for (const output of [
+        { ...created, config: undefined },
+        { ...created, config: { reservationAffinity: { ...created.config!.reservationAffinity!, values: ["projects/other/reservations/wrong"] } } },
+      ]) expect(String(yield* provider.diff!({ id: "gpu", olds: interruptedOld, news: desired, output } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(String(yield* provider.diff!({ id: "gpu", olds: interruptedOld, news: {
+        ...desired, config: { ...desired.config, reservationAffinity: { ...desired.config.reservationAffinity!, values: ["projects/other/reservations/wrong"] } },
+      }, output: created } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(yield* provider.diff!({ id: "gpu", olds: interruptedOld, news: {
+        ...desired, config: { ...desired.config, serviceAccount: "different-service-account" },
+      }, output: created } as never)).toEqual({ action: "replace" });
       expect(created.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(methods.filter((method) => method !== "GET")).toEqual(["POST"]);
       methods.length = 0;
@@ -251,6 +267,12 @@ describe("NodePool accelerator topology", () => {
       expect(read?.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(read?.networkConfig).toEqual(observed!.networkConfig);
       expect(yield* provider.diff!({ id: "gpu", olds: desired, news: desired, output: created } as never)).toBeUndefined();
+      const originalConfig = observed!.config;
+      observed!.config = { ...originalConfig, reservationAffinity: { ...originalConfig!.reservationAffinity!, values: ["projects/other/reservations/wrong"] } };
+      methods.length = 0;
+      expect(String(yield* provider.reconcile(input).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(methods).toEqual(["GET"]);
+      observed!.config = originalConfig;
       observed = { ...observed, networkConfig: undefined };
       methods.length = 0;
       const failure = yield* provider.reconcile(input).pipe(Effect.flip);

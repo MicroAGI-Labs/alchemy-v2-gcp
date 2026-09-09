@@ -132,6 +132,29 @@ describe("NodePool accelerator topology", () => {
     expect(await Effect.runPromise(diffNodePoolTopology(explicit, { ...reordered, name: "new" }))).toEqual({ action: "replace" });
   });
 
+  test("failed auto-network attempts recover matching explicit live pools without replacement", async () => {
+    const desired = { ...gb200, networkConfig: { additionalNodeNetworkConfigs: [{
+      network: "projects/host/global/networks/rdma", subnetwork: "projects/host/regions/us-east1/subnetworks/rail-0",
+    }] } };
+    const observed = toNodePoolAttributes({ name: desired.name, placementPolicy: desired.placementPolicy, networkConfig: {
+      subnetwork: "projects/host/regions/us-east1/subnetworks/primary",
+      additionalNodeNetworkConfigs: [{ network: "rdma", subnetwork: "rail-0" }],
+    } }, desired);
+    expect(await Effect.runPromise(diffNodePoolTopology(gb200, desired, observed))).toEqual({ action: "update" });
+    for (const output of [
+      undefined,
+      { ...observed, name: "unrelated-pool" },
+      { ...observed, project: "other-project" },
+      { ...observed, location: "us-west1" },
+      { ...observed, clusterName: "other-cluster" },
+      { ...observed, placementPolicy: { policyName: "other-policy" } },
+      { ...observed, networkConfig: { ...observed.networkConfig, additionalNodeNetworkConfigs: [{ network: "rdma", subnetwork: "wrong-rail" }] } },
+    ]) await expect(Effect.runPromise(diffNodePoolTopology(gb200, desired, output))).rejects.toThrow("Choose a new pool name");
+    // Omitting fields is not evidence that the live immutable setting vanished.
+    await expect(Effect.runPromise(diffNodePoolTopology(desired, { ...desired, networkConfig: undefined }, observed))).rejects.toThrow("Choose a new pool name");
+    await expect(Effect.runPromise(diffNodePoolTopology(desired, { ...desired, placementPolicy: undefined }, observed))).rejects.toThrow("Choose a new pool name");
+  });
+
   test("bare observed NIC names use primary subnet host/region without conflating qualified references", async () => {
     const desired = { ...gb200, networkConfig: { additionalNodeNetworkConfigs: [{
       network: "projects/host/global/networks/rdma", subnetwork: "projects/host/regions/us-east1/subnetworks/rail-0",
@@ -211,6 +234,14 @@ describe("NodePool accelerator topology", () => {
       const created = yield* provider.reconcile(input);
       expect(created.networkConfig).toEqual(observed!.networkConfig);
       expect(nodePoolTopologyDrift(created, desired)).toEqual([]);
+      if (desired.networkConfig?.additionalNodeNetworkConfigs) {
+        // Plan recovery supplies stale failed-auto props plus fresh read output.
+        expect(yield* provider.diff!({ id: "gpu", olds: gb200, news: desired, output: created } as never)).toEqual({ action: "update" });
+        // Recovery must not bypass independent immutable node-config checks.
+        expect(yield* provider.diff!({ id: "gpu", olds: gb200, news: {
+          ...desired, config: { ...desired.config, serviceAccount: "different-service-account" },
+        }, output: created } as never)).toEqual({ action: "replace" });
+      }
       expect(created.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(methods.filter((method) => method !== "GET")).toEqual(["POST"]);
       methods.length = 0;

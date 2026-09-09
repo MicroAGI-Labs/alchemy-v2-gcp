@@ -530,6 +530,18 @@ export const nodePoolTopologyDrift = (
   ) ? ["networkConfig.additionalNodeNetworkConfigs"] : []),
 ];
 
+/** A recovered live resource can already satisfy a failed attempt's new props.
+ * Compare the complete topology here, including removals: the regular drift
+ * check deliberately ignores fields no longer managed by a declaration.
+ */
+const observedTopologyMatches = (observed: NodePoolAttributes, news: NodePoolProps) =>
+  deepEqual(normalizedPlacement(observed.placementPolicy), normalizedPlacement(news.placementPolicy)) &&
+  (observed.networkConfig?.acceleratorNetworkProfile || undefined) === (news.networkConfig?.acceleratorNetworkProfile || undefined) &&
+  (news.networkConfig?.acceleratorNetworkProfile === "auto" || deepEqual(
+    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+    normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+  ));
+
 const validateNodeNetworks = (news: NodePoolProps) =>
   news.networkConfig?.acceleratorNetworkProfile && news.networkConfig.additionalNodeNetworkConfigs?.length
     ? Effect.fail(new Error("NodePool: automatic accelerator networking and explicit additional node networks are mutually exclusive"))
@@ -549,6 +561,12 @@ export const diffNodePoolTopology = Effect.fn(function* (
   if (!changed) return undefined;
   if (news.name !== undefined && news.name === olds.name &&
     news.project === olds.project && news.location === olds.location && news.clusterName === olds.clusterName) {
+    // Interrupted create recovery retains attempted props but refreshes output
+    // from read. If that exact pool already converged, update its state rather
+    // than replacing it or blocking recovery on the stale attempted topology.
+    if (output?.name === news.name && output.project === news.project &&
+      output.location === news.location && output.clusterName === news.clusterName &&
+      observedTopologyMatches(output, news)) return { action: "update" } as const;
     return yield* Effect.fail(new Error(
       "NodePool: placementPolicy, acceleratorNetworkProfile, and additional node networks are immutable. " +
       "Choose a new pool name to replace an explicitly named pool safely.",
@@ -703,7 +721,7 @@ export const NodePoolProvider = () =>
             return { action: "replace" } as const;
           }
           const topologyDiff = yield* diffNodePoolTopology(olds, news, output);
-          if (topologyDiff) return topologyDiff;
+          if (topologyDiff?.action === "replace") return topologyDiff;
           const oc = olds.config ?? ({} as NodePoolProps["config"]);
           const nc = news.config;
           if (
@@ -732,7 +750,7 @@ export const NodePoolProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
-          return undefined;
+          return topologyDiff;
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           yield* validateNodeNetworks(news);

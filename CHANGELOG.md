@@ -4,15 +4,26 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.12.0 — 2026-09-09
 
 ### Added
 
 - NodePool placement policies and GKE automatic accelerator network profiles,
   including observed topology, create mapping and fixed-name replacement guards.
+- Explicit additional node NICs and RoCE network profiles for Shared VPC GPU
+  clusters, with in-place cluster multi-networking configuration.
 - Regional `ResourcePolicy` for HIGH_THROUGHPUT / 1x72 accelerator placement.
 - `ReservationShareProject` for additive access to existing shared reservations,
   without taking ownership of reservation capacity or commitments.
+
+### Fixed
+
+- Recover interrupted node-pool creation using verified live topology and
+  reservation affinity, including generated names and unresolved saved references.
+- Normalize GKE's shortened NIC names, sparse named placement policies, and
+  omitted default surge settings without masking actual configuration changes.
+- Preserve resource-policy and reservation-share identities during recovery and
+  deletion when saved properties or attributes are incomplete.
 
 ## 0.11.8 — 2026-09-07
 

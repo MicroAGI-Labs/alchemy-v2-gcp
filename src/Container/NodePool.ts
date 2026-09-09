@@ -739,7 +739,7 @@ export const NodePoolProvider = () =>
         nuke: { skip: true },
         list: () => Effect.succeed([]),
         stables: ["name", "selfLink", "project", "location", "clusterName"],
-        diff: Effect.fn(function* ({ news, olds = {}, output }) {
+        diff: Effect.fn(function* ({ id, instanceId, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
           yield* validateNodeNetworks(news);
           if (
@@ -762,7 +762,9 @@ export const NodePoolProvider = () =>
             // Failed create state can contain [null] where an unresolved Output
             // was stripped. Only a fresh, matching same-pool observation may
             // replace that missing evidence; never interpret it as a new pool.
-            if (!output || output.name !== news.name || output.project !== news.project ||
+            const expectedName = news.name ??
+              (yield* createPhysicalName({ id, instanceId, maxLength: 40 })).toLowerCase();
+            if (!output || output.name !== expectedName || output.project !== news.project ||
               output.location !== news.location || output.clusterName !== news.clusterName ||
               !output.config?.reservationAffinity || !reservationAffinityMatches(output.config.reservationAffinity, news)) {
               return yield* Effect.fail(reservationAffinityError());
@@ -797,12 +799,12 @@ export const NodePoolProvider = () =>
           }
           return topologyDiff ?? (recoveredAffinity ? { action: "update" } as const : undefined);
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, instanceId, news, session }) {
           yield* validateNodeNetworks(news);
           const internalLabels = yield* gcpInternalLabels(id);
           const desiredName =
             news.name ??
-            (yield* createPhysicalName({ id, maxLength: 40 })).toLowerCase();
+            (yield* createPhysicalName({ id, instanceId, maxLength: 40 })).toLowerCase();
           const clusterPath = `projects/${news.project}/locations/${news.location}/clusters/${news.clusterName}`;
           const fqName = `${clusterPath}/nodePools/${desiredName}`;
           const desiredResourceLabels: Record<string, string> = {

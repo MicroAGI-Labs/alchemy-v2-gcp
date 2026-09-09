@@ -7,6 +7,7 @@ import {
 import * as cont from "@distilled.cloud/gcp/container_v1";
 import { Credentials } from "@distilled.cloud/gcp/Credentials";
 import * as Provider from "alchemy/Provider";
+import { Unowned } from "alchemy/AdoptPolicy";
 import { Stack } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
 import * as Effect from "effect/Effect";
@@ -202,6 +203,75 @@ describe("NodePool accelerator topology", () => {
     expect(nodePoolTopologyDrift(attrs, gb200)).toEqual(["networkConfig.acceleratorNetworkProfile"]);
     await expect(Effect.runPromise(diffNodePoolTopology(gb200, gb200, attrs))).rejects.toThrow("immutable");
     expect(await Effect.runPromise(diffNodePoolTopology({}, gb200))).toBeUndefined();
+  });
+
+  test("unnamed interrupted pools recover only their generated instance and owned live reservation", async () => {
+    const desired = { ...gb200, name: undefined };
+    const interrupted = { ...desired, config: { ...desired.config, reservationAffinity: {
+      ...desired.config.reservationAffinity!, values: [null],
+    } } } as unknown as NodePoolProps;
+    const instanceId = "00000000000000000000000000000000";
+    const generatedName = "nodepool-test-gpu-test-aaaaaaaaaaaaaaaa";
+    const labels = { alchemy_app: "nodepool-test", alchemy_stage: "test", alchemy_id: "gpu" };
+    let observed = toNodePoolCreateBody(desired, generatedName, labels);
+    const requests: string[] = [];
+    const client = HttpClient.make((request) => Effect.sync(() => {
+      requests.push(`${request.method} ${request.url}`);
+      expect(request.method).toBe("GET");
+      expect(request.url).toContain("/projects/cluster-project/locations/us-east1/clusters/research/nodePools");
+      if (request.url.endsWith("/nodePools")) {
+        return HttpClientResponse.fromWeb(request, Response.json({ nodePools: [
+          { ...observed, name: "another-owned-resource", config: { ...observed.config, resourceLabels: { ...labels, alchemy_id: "someone-else" } } },
+          observed,
+        ] }));
+      }
+      expect(request.url).toEndWith(`/nodePools/${generatedName}`);
+      return HttpClientResponse.fromWeb(request, Response.json(observed));
+    }));
+    const program = Effect.gen(function* () {
+      const provider = yield* Provider.Provider<NodePool>(NodePool.Type);
+      const input = { id: "gpu", instanceId, olds: interrupted, news: desired };
+      // Recovery scans labels, skipping another logical resource in the same cluster.
+      const recovered = yield* provider.read!({ ...input, output: undefined } as never);
+      expect(recovered?.name).toBe(generatedName);
+      expect(Unowned.is(recovered)).toBe(false);
+      expect(yield* provider.diff!({ ...input, output: recovered } as never)).toEqual({ action: "update" });
+      for (const output of [
+        undefined,
+        { ...recovered!, name: "" },
+        { ...recovered!, name: "another-instance" },
+        { ...recovered!, project: "other-project" },
+        { ...recovered!, location: "us-west1" },
+        { ...recovered!, clusterName: "other-cluster" },
+        { ...recovered!, config: undefined },
+        { ...recovered!, config: { reservationAffinity: { ...desired.config.reservationAffinity!, values: ["projects/other/reservations/wrong"] } } },
+      ]) expect(String(yield* provider.diff!({ ...input, output } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(String(yield* provider.diff!({ ...input, instanceId: "11111111111111111111111111111111", output: recovered } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(String(yield* provider.diff!({ ...input, olds: { ...interrupted, name: "explicit-other" }, news: { ...desired, name: "explicit-other" }, output: recovered } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(String(yield* provider.diff!({ ...input, news: { ...desired, config: { ...desired.config, reservationAffinity: { ...desired.config.reservationAffinity!, values: ["projects/other/reservations/wrong"] } } }, output: recovered } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(yield* provider.diff!({ ...input, news: { ...desired, config: { ...desired.config, serviceAccount: "another-sa" } }, output: recovered } as never)).toEqual({ action: "replace" });
+      requests.length = 0;
+      // The provider must resume the same generated name using the persisted
+      // instanceId argument, without needing a separate InstanceId context.
+      const adopted = yield* provider.reconcile({ ...input, output: recovered } as never);
+      expect(adopted.name).toBe(generatedName);
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests.every((request) => request.endsWith(`/nodePools/${generatedName}`))).toBe(true);
+      observed = { ...observed, config: { ...observed.config, resourceLabels: { ...labels, alchemy_stage: "another-stage" } } };
+      expect(yield* provider.read!({ ...input, output: undefined } as never)).toBeUndefined();
+      expect(Unowned.is(yield* provider.read!({ ...input, output: recovered } as never))).toBe(true);
+      observed = { ...observed, config: { ...observed.config, resourceLabels: labels, reservationAffinity: { ...desired.config.reservationAffinity!, values: ["projects/other/reservations/wrong"] } } };
+      requests.length = 0;
+      expect(String(yield* provider.reconcile({ ...input, output: recovered } as never).pipe(Effect.flip))).toContain("matching live reservation evidence");
+      expect(requests).toHaveLength(1);
+    }).pipe(
+      Effect.provide(NodePoolProvider()),
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provideService(Credentials, Effect.succeed({ accessToken: Redacted.make("unit-test-only") })),
+      Effect.provideService(Stage, "test"),
+      Effect.provideService(Stack, { name: "nodepool-test", stage: "test" } as Stack["Service"]),
+    );
+    await Effect.runPromise(program as Effect.Effect<void>);
   });
 
   test.each([

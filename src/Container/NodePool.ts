@@ -369,6 +369,20 @@ export const toNodeConfigCreateBody = (
   };
 };
 
+export const nodePoolUpgradeSettingsMatch = (
+  observed: cont.UpgradeSettings | undefined,
+  desired: NonNullable<NodePoolProps["upgradeSettings"]>,
+) => {
+  // The API omits protobuf zero values and fills in the default SURGE strategy.
+  // Compare only fields this provider manages, retaining real numeric changes.
+  const normalized = (settings: cont.UpgradeSettings | undefined) => ({
+    maxSurge: settings?.maxSurge ?? 0,
+    maxUnavailable: settings?.maxUnavailable ?? 0,
+    strategy: settings?.strategy ?? "SURGE",
+  });
+  return deepEqual(normalized(observed), normalized(desired));
+};
+
 /**
  * Build a non-location `UpdateNodePoolRequest` body, populating only
  * fields whose desired value differs from observed. Wrapping (NetworkTags
@@ -456,7 +470,7 @@ const toNodePoolUpdateBody = (
   }
   if (
     news.upgradeSettings &&
-    !deepEqual(observed.upgradeSettings, news.upgradeSettings)
+    !nodePoolUpgradeSettingsMatch(observed.upgradeSettings, news.upgradeSettings)
   ) {
     body.upgradeSettings = news.upgradeSettings;
   }

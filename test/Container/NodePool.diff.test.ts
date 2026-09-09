@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  NodePool, NodePoolProvider, diffNodePoolTopology, nodePoolSizeNeedsSync,
+  NodePool, NodePoolProvider, diffNodePoolTopology, nodePoolSizeNeedsSync, nodePoolUpgradeSettingsMatch,
   nodePoolTopologyDrift, toNodePoolAttributes, toNodePoolCreateBody,
   type NodePoolProps,
 } from "../../src/Container/NodePool.ts";
@@ -60,6 +60,14 @@ const gb200: NodePoolProps = {
 };
 
 describe("NodePool accelerator topology", () => {
+  test("surge defaults accept omitted zeros without hiding real rollout changes", () => {
+    expect(nodePoolUpgradeSettingsMatch({ maxUnavailable: 1, strategy: "SURGE" }, { maxSurge: 0, maxUnavailable: 1 })).toBe(true);
+    expect(nodePoolUpgradeSettingsMatch({ maxSurge: 1, strategy: "SURGE" }, { maxSurge: 1, maxUnavailable: 0 })).toBe(true);
+    expect(nodePoolUpgradeSettingsMatch({ maxSurge: 1, maxUnavailable: 1, strategy: "SURGE" }, { maxSurge: 0, maxUnavailable: 1 })).toBe(false);
+    expect(nodePoolUpgradeSettingsMatch({ strategy: "SURGE" }, { maxSurge: 0, maxUnavailable: 1 })).toBe(false);
+    expect(nodePoolUpgradeSettingsMatch({ maxUnavailable: 1, strategy: "BLUE_GREEN" }, { maxSurge: 0, maxUnavailable: 1 })).toBe(false);
+  });
+
   test("maps topology and automated networking onto pool-level API fields", () => {
     const body = toNodePoolCreateBody(gb200, gb200.name!, { alchemy_id: "gpu" });
     expect(body.placementPolicy).toEqual(gb200.placementPolicy);
@@ -211,6 +219,8 @@ describe("NodePool accelerator topology", () => {
         observed = JSON.parse(new TextDecoder().decode(request.body.body)).nodePool;
         // Exercise a sparse named-policy response through the actual reconciler.
         delete observed!.placementPolicy!.type;
+        // Captured live GB200 response: zero maxSurge is omitted, SURGE is filled.
+        observed!.upgradeSettings = { maxUnavailable: 1, strategy: "SURGE" };
         if (observed!.networkConfig?.additionalNodeNetworkConfigs) {
           expect(observed!.networkConfig.additionalNodeNetworkConfigs).toEqual([...(desired.networkConfig?.additionalNodeNetworkConfigs ?? [])]);
           observed!.networkConfig.subnetwork = "projects/host/regions/us-east1/subnetworks/primary";

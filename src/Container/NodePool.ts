@@ -70,6 +70,8 @@ export type NodePoolProps = {
    */
   networkConfig?: {
     acceleratorNetworkProfile?: "auto";
+    /** Explicit NICs, in hardware order. Immutable; mutually exclusive with auto. */
+    additionalNodeNetworkConfigs?: ReadonlyArray<{ network: string; subnetwork: string }>;
   };
   /** Node configuration (machine, disk, accelerators, taints, labels, …). */
   config: {
@@ -216,7 +218,10 @@ export type NodePoolAttributes = {
   /** Observed placement policy; refreshed by read to detect topology drift. */
   placementPolicy?: { type?: string; policyName?: string };
   /** Only the managed profile is exposed, not GKE-generated network details. */
-  networkConfig?: { acceleratorNetworkProfile?: string };
+  networkConfig?: {
+    acceleratorNetworkProfile?: string;
+    additionalNodeNetworkConfigs?: ReadonlyArray<cont.AdditionalNodeNetworkConfig>;
+  };
 };
 
 /**
@@ -469,8 +474,11 @@ export const toNodePoolAttributes = (
   status: pool.status,
   instanceGroupUrls: pool.instanceGroupUrls ?? [],
   ...(pool.placementPolicy ? { placementPolicy: pool.placementPolicy } : {}),
-  ...(pool.networkConfig?.acceleratorNetworkProfile ? {
-    networkConfig: { acceleratorNetworkProfile: pool.networkConfig.acceleratorNetworkProfile },
+  ...(pool.networkConfig ? {
+    networkConfig: {
+      ...(pool.networkConfig.acceleratorNetworkProfile ? { acceleratorNetworkProfile: pool.networkConfig.acceleratorNetworkProfile } : {}),
+      ...(pool.networkConfig.additionalNodeNetworkConfigs ? { additionalNodeNetworkConfigs: pool.networkConfig.additionalNodeNetworkConfigs } : {}),
+    },
   } : {}),
 });
 
@@ -481,9 +489,17 @@ const normalizedPlacement = (policy: { type?: string; policyName?: string } | un
   policyName: policy?.policyName || undefined,
 });
 
+// GKE can return full URLs for a request using project-relative resource paths.
+// Keep array order: it determines which physical NIC receives each network.
+const normalizedNodeNetworks = (networks: ReadonlyArray<cont.AdditionalNodeNetworkConfig> | undefined) =>
+  (networks ?? []).map(({ network, subnetwork }) => ({
+    network: network?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, ""),
+    subnetwork: subnetwork?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, ""),
+  }));
+
 /** Compare only explicitly managed topology, not GKE-generated NICs/subnets. */
 export const nodePoolTopologyDrift = (
-  observed: Pick<cont.NodePool, "placementPolicy" | "networkConfig">,
+  observed: Pick<NodePoolAttributes, "placementPolicy" | "networkConfig">,
   news: NodePoolProps,
 ): string[] => [
   ...(news.placementPolicy !== undefined && !deepEqual(
@@ -492,7 +508,16 @@ export const nodePoolTopologyDrift = (
   ...(news.networkConfig !== undefined &&
     (observed.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig.acceleratorNetworkProfile
     ? ["networkConfig.acceleratorNetworkProfile"] : []),
+  ...(news.networkConfig?.additionalNodeNetworkConfigs !== undefined && !deepEqual(
+    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs),
+    normalizedNodeNetworks(news.networkConfig.additionalNodeNetworkConfigs),
+  ) ? ["networkConfig.additionalNodeNetworkConfigs"] : []),
 ];
+
+const validateNodeNetworks = (news: NodePoolProps) =>
+  news.networkConfig?.acceleratorNetworkProfile && news.networkConfig.additionalNodeNetworkConfigs?.length
+    ? Effect.fail(new Error("NodePool: automatic accelerator networking and explicit additional node networks are mutually exclusive"))
+    : Effect.void;
 
 /** Never replace a physical pool by adopting its own still-live predecessor. */
 export const diffNodePoolTopology = Effect.fn(function* (
@@ -503,12 +528,13 @@ export const diffNodePoolTopology = Effect.fn(function* (
   if (!olds.config) return undefined;
   const changed = !deepEqual(normalizedPlacement(olds.placementPolicy), normalizedPlacement(news.placementPolicy)) ||
     (olds.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig?.acceleratorNetworkProfile ||
+    !deepEqual(normalizedNodeNetworks(olds.networkConfig?.additionalNodeNetworkConfigs), normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs)) ||
     (output !== undefined && nodePoolTopologyDrift(output, news).length > 0);
   if (!changed) return undefined;
   if (news.name !== undefined && news.name === olds.name &&
     news.project === olds.project && news.location === olds.location && news.clusterName === olds.clusterName) {
     return yield* Effect.fail(new Error(
-      "NodePool: placementPolicy and acceleratorNetworkProfile are immutable. " +
+      "NodePool: placementPolicy, acceleratorNetworkProfile, and additional node networks are immutable. " +
       "Choose a new pool name to replace an explicitly named pool safely.",
     ));
   }
@@ -526,7 +552,10 @@ export const toNodePoolCreateBody = (
   ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
   config: toNodeConfigCreateBody(news.config, resourceLabels),
   ...(news.placementPolicy ? { placementPolicy: news.placementPolicy } : {}),
-  ...(news.networkConfig ? { networkConfig: news.networkConfig } : {}),
+  ...(news.networkConfig ? { networkConfig: {
+    ...(news.networkConfig.acceleratorNetworkProfile ? { acceleratorNetworkProfile: news.networkConfig.acceleratorNetworkProfile } : {}),
+    ...(news.networkConfig.additionalNodeNetworkConfigs ? { additionalNodeNetworkConfigs: [...news.networkConfig.additionalNodeNetworkConfigs] } : {}),
+  } } : {}),
   ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
   ...(news.management ? { management: news.management } : {}),
   ...(news.upgradeSettings ? { upgradeSettings: news.upgradeSettings } : {}),
@@ -646,6 +675,7 @@ export const NodePoolProvider = () =>
         stables: ["name", "selfLink", "project", "location", "clusterName"],
         diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
+          yield* validateNodeNetworks(news);
           if (
             somePropsAreDifferent(olds as NodePoolProps, news, [
               "project",
@@ -689,6 +719,7 @@ export const NodePoolProvider = () =>
           return undefined;
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
+          yield* validateNodeNetworks(news);
           const internalLabels = yield* gcpInternalLabels(id);
           const desiredName =
             news.name ??

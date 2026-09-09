@@ -83,7 +83,7 @@ export type ClusterProps = {
    * honors this at cluster creation — existing clusters cannot be
    * migrated in place.
    *
-   * **Consumed only on the create path** (like `initialNodePool`):
+   * **datapathProvider is consumed only on the create path** (like `initialNodePool`):
    * changing it on an existing cluster is a silent no-op, NOT a
    * replace trigger. A diff-driven same-name replace would be
    * destructive here — the engine creates the new generation first,
@@ -95,6 +95,8 @@ export type ClusterProps = {
    */
   networkConfig?: {
     datapathProvider?: "LEGACY_DATAPATH" | "ADVANCED_DATAPATH";
+    /** Mutable in place via ClusterUpdate.desiredEnableMultiNetworking. */
+    enableMultiNetworking?: boolean;
   };
   /** GKE release channel. Mutable via `update` (`desiredReleaseChannel`). */
   releaseChannel?: { channel: "RAPID" | "REGULAR" | "STABLE" | "UNSPECIFIED" };
@@ -195,6 +197,7 @@ export type ClusterProps = {
 };
 
 export type ClusterAttributes = {
+  networkConfig?: { enableMultiNetworking?: boolean };
   /** Cluster name. */
   name: string;
   /** Server-defined URL. */
@@ -318,6 +321,7 @@ const toClusterAttributes = (
   project: parent.project,
   location: parent.location,
   currentMasterVersion: c.currentMasterVersion,
+  networkConfig: { enableMultiNetworking: c.networkConfig?.enableMultiNetworking ?? false },
   status: c.status,
   releaseChannel: c.releaseChannel,
   resourceLabels: normalizeStringMap(c.resourceLabels) ?? {},
@@ -518,6 +522,10 @@ export const ClusterProvider = () =>
           update.desiredNetworkTierConfig =
             args.news.ipAllocationPolicy.networkTierConfig;
         }
+        if (args.news.networkConfig?.enableMultiNetworking !== undefined &&
+          args.news.networkConfig.enableMultiNetworking !== (args.observed.networkConfig?.enableMultiNetworking ?? false)) {
+          update.desiredEnableMultiNetworking = args.news.networkConfig.enableMultiNetworking;
+        }
         if (Object.keys(update).length === 0) return;
         const op = yield* updateClusters({
           name: args.fqName,
@@ -537,13 +545,17 @@ export const ClusterProvider = () =>
           "endpoint",
           "clusterCaCertificate",
         ],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
-          // `initialNodePool` and `networkConfig` are intentionally NOT
-          // part of diff — both are consumed only on create. See the
-          // ClusterProps JSDoc (networkConfig explains why a same-name
-          // replace would be destructive).
-          return diffClusterProps(olds, news);
+          const replacement = diffClusterProps(olds, news);
+          if (replacement) return replacement;
+          // Datapath and the bootstrap pool remain create-only; enabling
+          // additional interfaces uses the existing cluster update API.
+          if (output && news.networkConfig?.enableMultiNetworking !== undefined &&
+            news.networkConfig.enableMultiNetworking !== (output.networkConfig?.enableMultiNetworking ?? false)) {
+            return { action: "update" } as const;
+          }
+          return undefined;
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           const internalLabels = yield* gcpInternalLabels(id);

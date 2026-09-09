@@ -1,8 +1,9 @@
+import { ConfigError } from "@distilled.cloud/gcp";
 import * as compute from "@distilled.cloud/gcp/compute_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
-import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
+import { isResolved } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Output from "alchemy/Output";
 import * as Provider from "alchemy/Provider";
@@ -169,6 +170,11 @@ export type NetworkProps = {
    * 1500 (internet default), 8896 (jumbo frames). Immutable — replace.
    */
   mtu?: number;
+  /** Full or partial Compute network-profile URL. Create-only; changing a
+   * fixed-name network requires choosing a new name, never in-place replacement.
+   * Example: projects/{project}/global/networkProfiles/{profile}.
+   */
+  networkProfile?: string;
 };
 
 export type NetworkAttributes = {
@@ -188,6 +194,8 @@ export type NetworkAttributes = {
   routingMode: string | undefined;
   /** Active MTU in bytes. */
   mtu: number | undefined;
+  /** Active immutable network profile, as returned by Compute. */
+  networkProfile: string | undefined;
 };
 
 export type Network = Resource<
@@ -199,18 +207,59 @@ export type Network = Resource<
 >;
 export const Network = Resource<Network>("GCP.Network");
 
-const toNetworkAttributes = (
+export const toNetworkAttributes = (
   n: compute.Network,
-  parent: { project: string },
+  parent: { project: string; name: string },
 ): NetworkAttributes => ({
-  name: n.name ?? "",
+  name: n.name || parent.name,
   project: parent.project,
-  selfLink: n.selfLink ?? "",
+  selfLink: n.selfLink || `https://www.googleapis.com/compute/v1/projects/${parent.project}/global/networks/${parent.name}`,
   id: n.id ?? "",
   description: stripAlchemyMarker(n.description),
   autoCreateSubnetworks: n.autoCreateSubnetworks ?? false,
   routingMode: n.routingConfig?.routingMode,
   mtu: n.mtu,
+  networkProfile: n.networkProfile,
+});
+
+/** Compute accepts both full and partial URLs. Keep project identity intact. */
+export const normalizeNetworkProfile = (profile: string | undefined) =>
+  profile?.trim().replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, "").replace(/^\//, "") || undefined;
+
+const priorIdentity = (olds?: Partial<NetworkProps>, output?: Partial<NetworkAttributes>) => ({
+  project: output?.project || olds?.project,
+  name: output?.name || olds?.name,
+});
+const immutableError = (name: string) => new ConfigError({
+  message: `Network ${name} has incompatible immutable networkProfile, MTU or subnet mode; choose a new network name before changing these fields`,
+});
+const immutableChanged = (prior: Partial<NetworkProps>, news: NetworkProps) =>
+  (prior.autoCreateSubnetworks ?? false) !== (news.autoCreateSubnetworks ?? false) ||
+  (prior.mtu ?? 1460) !== (news.mtu ?? 1460) ||
+  normalizeNetworkProfile(prior.networkProfile) !== normalizeNetworkProfile(news.networkProfile);
+
+/** Protect fixed names from replacement GC deleting the same physical VPC. */
+export const diffNetworkConfiguration = Effect.fn(function* (
+  olds: Partial<NetworkProps> | undefined,
+  news: NetworkProps,
+  output?: Partial<NetworkAttributes>,
+) {
+  const identity = priorIdentity(olds, output);
+  if ((identity.project && identity.project !== news.project) ||
+      (news.name !== undefined && identity.name && identity.name !== news.name) ||
+      (news.name === undefined && olds?.name !== undefined)) return { action: "replace" } as const;
+  if (!olds && !output) return undefined;
+  // Old props protect against same-name replacements even if refreshed output
+  // already reflects a remote change. Output provides recovery/drift evidence.
+  const changed = (olds !== undefined && immutableChanged(olds, news)) ||
+    (output !== undefined && (
+      (output.autoCreateSubnetworks !== undefined && output.autoCreateSubnetworks !== (news.autoCreateSubnetworks ?? false)) ||
+      (news.mtu !== undefined && output.mtu !== undefined && output.mtu !== news.mtu) ||
+      (Object.hasOwn(output, "networkProfile") && normalizeNetworkProfile(output.networkProfile) !== normalizeNetworkProfile(news.networkProfile))
+    ));
+  if (!changed) return undefined;
+  if (news.name !== undefined && identity.name === news.name && identity.project === news.project) return yield* immutableError(news.name);
+  return { action: "replace" } as const;
 });
 
 export const NetworkProvider = () =>
@@ -255,21 +304,12 @@ export const NetworkProvider = () =>
         nuke: { skip: true },
         list: () => Effect.succeed([]),
         stables: ["name", "project", "selfLink", "id"],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ news, olds, output }) {
           if (!isResolved(news)) return undefined;
-          if (
-            somePropsAreDifferent(olds as NetworkProps, news, [
-              "project",
-              "name",
-              "autoCreateSubnetworks",
-              "mtu",
-            ])
-          ) {
-            return { action: "replace" } as const;
-          }
-          return undefined;
+          return yield* diffNetworkConfiguration(olds, news, output);
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, news, olds, output, session }) {
+          yield* diffNetworkConfiguration(olds, news, output);
           const desiredName =
             news.name ??
             (yield* createPhysicalName({ id, maxLength: 63 })).toLowerCase();
@@ -292,6 +332,7 @@ export const NetworkProvider = () =>
               description: desiredDescription,
               autoCreateSubnetworks: news.autoCreateSubnetworks ?? false,
               ...(news.mtu !== undefined ? { mtu: news.mtu } : {}),
+              ...(news.networkProfile ? { networkProfile: news.networkProfile } : {}),
               ...(news.routingMode
                 ? { routingConfig: { routingMode: news.routingMode } }
                 : {}),
@@ -311,6 +352,12 @@ export const NetworkProvider = () =>
             });
           }
 
+          // Even create/adoption/conflict recovery must not claim a different
+          // immutable profile was installed on an already existing VPC.
+          if (normalizeNetworkProfile(observed.networkProfile) !== normalizeNetworkProfile(news.networkProfile)) {
+            return yield* immutableError(desiredName);
+          }
+
           // 3. Sync — only routing config can be mutated post-create.
           //    Description, MTU, autoCreateSubnetworks are all locked.
           yield* syncRoutingMode({
@@ -325,16 +372,20 @@ export const NetworkProvider = () =>
             project: news.project,
             network: desiredName,
           });
-          return toNetworkAttributes(final, { project: news.project });
+          return toNetworkAttributes(final, { project: news.project, name: desiredName });
         }),
-        delete: Effect.fn(function* ({ output, session }) {
+        delete: Effect.fn(function* ({ output, olds, session }) {
+          const identity = priorIdentity(olds, output);
+          if (!identity.project || !identity.name) return;
+          const project = identity.project;
+          const name = identity.name;
           const deletion = deleteNetworks({
-            project: output.project,
-            network: output.name,
+            project,
+            network: name,
           }).pipe(
             Effect.flatMap((op) =>
               op.name
-                ? awaitOp(output.project, op.name, session)
+                ? awaitOp(project, op.name, session)
                 : Effect.succeed(op),
             ),
           );
@@ -343,15 +394,15 @@ export const NetworkProvider = () =>
           );
         }),
         read: Effect.fn(function* ({ id, output, olds }) {
-          const project = output?.project ?? olds?.project;
+          const project = output?.project || olds?.project;
           if (!project) return undefined;
           const name =
-            output?.name ??
-            olds?.name ??
+            output?.name ||
+            olds?.name ||
             (yield* createPhysicalName({ id, maxLength: 63 })).toLowerCase();
           const observed = yield* observe(project, name);
           if (!observed) return undefined;
-          const attrs = toNetworkAttributes(observed, { project });
+          const attrs = toNetworkAttributes(observed, { project, name });
           // Adoption gate via the description marker — networks have no
           // labels field (verified against compute-v1 SDK Network type).
           return (yield* descriptionHasAlchemyMarker(id, observed.description))

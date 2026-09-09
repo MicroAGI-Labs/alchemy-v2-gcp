@@ -4,6 +4,16 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- NodePool placement policies and GKE automatic accelerator network profiles,
+  including observed topology, create mapping and fixed-name replacement guards.
+- Regional `ResourcePolicy` for HIGH_THROUGHPUT / 1x72 accelerator placement.
+- `ReservationShareProject` for additive access to existing shared reservations,
+  without taking ownership of reservation capacity or commitments.
+
 ## 0.11.8 — 2026-09-07
 
 ### Changed

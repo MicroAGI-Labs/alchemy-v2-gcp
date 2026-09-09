@@ -19,6 +19,8 @@ import {
 } from "./Compute/ForwardingRule.ts";
 import { GlobalAddress, GlobalAddressProvider } from "./Compute/GlobalAddress.ts";
 import { Network, NetworkProvider } from "./Compute/Network.ts";
+import { ResourcePolicy, ResourcePolicyProvider } from "./Compute/ResourcePolicy.ts";
+import { ReservationShareProject, ReservationShareProjectProvider } from "./Compute/ReservationShareProject.ts";
 import {
   ProjectDefaultNetworkTier,
   ProjectDefaultNetworkTierProvider,
@@ -110,6 +112,8 @@ export const providers = () =>
       NodePool,
       ApiEnable,
       Network,
+      ResourcePolicy,
+      ReservationShareProject,
       ProjectDefaultNetworkTier,
       Subnetwork,
       Firewall,
@@ -145,6 +149,8 @@ export const providers = () =>
         NodePoolProvider(),
         ApiEnableProvider(),
         NetworkProvider(),
+        ResourcePolicyProvider(),
+        ReservationShareProjectProvider(),
         ProjectDefaultNetworkTierProvider(),
         SubnetworkProvider(),
         FirewallProvider(),

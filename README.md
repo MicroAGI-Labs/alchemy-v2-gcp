@@ -155,6 +155,51 @@ const batch = yield* GCP.Job("ProcessBatch", {
 
 Clean type aliases are re-exported from the top level so consumers don't need to import from `@distilled.cloud/gcp` directly: `GCP.RevisionTemplate`, `GCP.Container`, `GCP.TrafficTarget`, `GCP.VpcAccess`, `GCP.NodeSelector`, etc.
 
+## Reserved accelerator pools
+
+`NodePool.placementPolicy` accepts a regional Compute policy name and compact
+placement. `NodePool.networkConfig.acceleratorNetworkProfile: "auto"` delegates
+accelerator NIC/VPC creation to GKE. These are immutable pool settings; changing
+them on an explicitly named pool requires a new pool name. A mismatched live
+pool fails before any resize or configuration update. GKE version, GPU model,
+Dataplane V2 and networking-driver labels must meet Google's prerequisites.
+
+Shared VPC clusters must configure accelerator networks explicitly: GKE rejects
+`acceleratorNetworkProfile: "auto"` with Shared VPC. Set
+`Cluster.networkConfig.enableMultiNetworking: true` (updated in place through
+`ClusterUpdate.desiredEnableMultiNetworking`) and supply ordered
+`NodePool.networkConfig.additionalNodeNetworkConfigs` entries with `network`
+and `subnetwork` paths. A4X uses one additional gVNIC and four RDMA interfaces;
+keep this order and omit the automatic profile. The explicit interface list is
+immutable. Use `Network.networkProfile` with a project-qualified profile such
+as `projects/host/global/networkProfiles/us-east1-d-vpc-roce` for the RDMA VPC;
+changing that profile requires a new physical network name. Existing
+`Subnetwork` and `Firewall` resources support the associated subnet/traffic setup.
+For Shared VPC, place the extra networks/subnets in the host project and grant
+the service project's GKE and Google APIs service agents subnet access.
+
+The cluster's observed `networkConfig` output is not stable: downstream pools
+can depend on it to wait for the multi-networking update. Retain the
+`cloud.google.com/gke-networking-dra-driver=true` node label to use GKE-managed
+DRANET with explicit NICs. Do not also declare Device-type multi-network
+`Network` objects, which conflict with DRANET ownership. See Google's
+[manual A4X setup](https://docs.cloud.google.com/ai-hypercomputer/docs/create/gke-ai-hypercompute-custom-a4x),
+[DRANET configuration](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/allocate-network-resources-dra),
+and [cluster update API](https://docs.cloud.google.com/kubernetes-engine/docs/reference/rest/v1/ClusterUpdate).
+
+`ResourcePolicy` currently supports the `HIGH_THROUGHPUT` / `1x72` workload
+policy used by GB200. It owns only the regional policy. Changes to immutable
+policy settings require a new policy name.
+
+`ReservationShareProject` manages one consumer on an existing
+`SPECIFIC_PROJECTS` reservation. Specify owner `project`, `zone`, `reservation`,
+`consumerProjectId` and numeric `consumerProjectNumber`. The numeric ID is used
+in the field-level sharing update; both aliases are accepted when observing
+API responses. This resource never creates, resizes or deletes the reservation
+or CUD. A preexisting grant is retained on teardown; a grant added by the
+resource is removed without changing other consumers. State-loss recovery
+conservatively retains grants whose ownership can no longer be established.
+
 ## Adoption
 
 `read` is gated on the alchemy internal labels `alchemy_app` / `alchemy_stage` / `alchemy_id`. Existing GCP resources lacking those labels are returned `Unowned` — the engine refuses to take them over without explicit `--adopt` (or `adopt(true)` on the resource call).

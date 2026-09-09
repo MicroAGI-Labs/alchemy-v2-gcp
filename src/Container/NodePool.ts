@@ -53,6 +53,26 @@ export type NodePoolProps = {
    * "do not combine with other fields" warning.
    */
   nodeLocations?: ReadonlyArray<string>;
+  /**
+   * Placement policy for accelerator topology. The named Compute resource
+   * policy must be in the pool's project and region. Immutable: change the
+   * pool name when changing this configuration on an explicitly named pool.
+   */
+  placementPolicy?: {
+    type?: "COMPACT";
+    policyName?: string;
+  };
+  /**
+   * GKE-managed accelerator networking (DRANET). Requires a supported machine
+   * type/version and Dataplane V2. Immutable; GKE owns the resulting NICs and
+   * networks. Set the networking DRA driver node label separately as required
+   * by GKE. Do not combine with legacy multi-network device attachment.
+   */
+  networkConfig?: {
+    acceleratorNetworkProfile?: "auto";
+    /** Explicit NICs, in hardware order. Immutable; mutually exclusive with auto. */
+    additionalNodeNetworkConfigs?: ReadonlyArray<{ network: string; subnetwork: string }>;
+  };
   /** Node configuration (machine, disk, accelerators, taints, labels, …). */
   config: {
     /** GCE machine type, e.g. `n2-standard-4`. Mutable via `update`. */
@@ -195,6 +215,16 @@ export type NodePoolAttributes = {
   status: string | undefined;
   /** Managed instance group URLs backing the pool. */
   instanceGroupUrls: ReadonlyArray<string>;
+  /** Observed immutable config needed to validate interrupted-create recovery. */
+  config?: { reservationAffinity?: cont.ReservationAffinity };
+  /** Observed placement policy; refreshed by read to detect topology drift. */
+  placementPolicy?: { type?: string; policyName?: string };
+  /** Observed topology and primary-subnet context for resolving bare NIC names. */
+  networkConfig?: {
+    acceleratorNetworkProfile?: string;
+    additionalNodeNetworkConfigs?: ReadonlyArray<cont.AdditionalNodeNetworkConfig>;
+    subnetwork?: string;
+  };
 };
 
 /**
@@ -339,6 +369,20 @@ export const toNodeConfigCreateBody = (
   };
 };
 
+export const nodePoolUpgradeSettingsMatch = (
+  observed: cont.UpgradeSettings | undefined,
+  desired: NonNullable<NodePoolProps["upgradeSettings"]>,
+) => {
+  // The API omits protobuf zero values and fills in the default SURGE strategy.
+  // Compare only fields this provider manages, retaining real numeric changes.
+  const normalized = (settings: cont.UpgradeSettings | undefined) => ({
+    maxSurge: settings?.maxSurge ?? 0,
+    maxUnavailable: settings?.maxUnavailable ?? 0,
+    strategy: settings?.strategy ?? "SURGE",
+  });
+  return deepEqual(normalized(observed), normalized(desired));
+};
+
 /**
  * Build a non-location `UpdateNodePoolRequest` body, populating only
  * fields whose desired value differs from observed. Wrapping (NetworkTags
@@ -426,7 +470,7 @@ const toNodePoolUpdateBody = (
   }
   if (
     news.upgradeSettings &&
-    !deepEqual(observed.upgradeSettings, news.upgradeSettings)
+    !nodePoolUpgradeSettingsMatch(observed.upgradeSettings, news.upgradeSettings)
   ) {
     body.upgradeSettings = news.upgradeSettings;
   }
@@ -434,7 +478,7 @@ const toNodePoolUpdateBody = (
   return Object.keys(body).length === 0 ? undefined : body;
 };
 
-const toNodePoolAttributes = (
+export const toNodePoolAttributes = (
   pool: cont.NodePool,
   parent: { project: string; location: string; clusterName: string },
 ): NodePoolAttributes => ({
@@ -446,6 +490,141 @@ const toNodePoolAttributes = (
   version: pool.version,
   status: pool.status,
   instanceGroupUrls: pool.instanceGroupUrls ?? [],
+  ...(pool.config ? { config: { reservationAffinity: pool.config.reservationAffinity } } : {}),
+  ...(pool.placementPolicy ? { placementPolicy: pool.placementPolicy } : {}),
+  ...(pool.networkConfig ? {
+    networkConfig: {
+      ...(pool.networkConfig.subnetwork ? { subnetwork: pool.networkConfig.subnetwork } : {}),
+      ...(pool.networkConfig.acceleratorNetworkProfile ? { acceleratorNetworkProfile: pool.networkConfig.acceleratorNetworkProfile } : {}),
+      ...(pool.networkConfig.additionalNodeNetworkConfigs ? { additionalNodeNetworkConfigs: pool.networkConfig.additionalNodeNetworkConfigs } : {}),
+    },
+  } : {}),
+});
+
+const normalizedPlacement = (policy: { type?: string; policyName?: string } | undefined) => ({
+  // A named custom policy determines placement; tolerate sparse API responses
+  // that omit its redundant type while preserving unnamed policy comparisons.
+  type: policy?.policyName || policy?.type === "TYPE_UNSPECIFIED" ? undefined : policy?.type,
+  policyName: policy?.policyName || undefined,
+});
+
+const computeResourcePath = (value: string | undefined) =>
+  value?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, "");
+
+// Shared VPC NICs belong to the primary subnet's host project and region.
+// GKE returns bare additional NIC names even for fully qualified requests.
+// Resolve only bare names with observed context; never discard a qualified
+// reference's project/region. Keep order because it determines physical NICs.
+const normalizedNodeNetworks = (
+  networks: ReadonlyArray<cont.AdditionalNodeNetworkConfig> | undefined,
+  primarySubnet?: string,
+) => {
+  const context = computeResourcePath(primarySubnet)?.match(/^projects\/([^/]+)\/regions\/([^/]+)\/subnetworks\/[^/]+$/);
+  return (networks ?? []).map((nic) => {
+    const network = computeResourcePath(nic.network);
+    const subnetwork = computeResourcePath(nic.subnetwork);
+    return {
+      network: context && network && !network.includes("/") ? `projects/${context[1]}/global/networks/${network}` : network,
+      subnetwork: context && subnetwork && !subnetwork.includes("/") ? `projects/${context[1]}/regions/${context[2]}/subnetworks/${subnetwork}` : subnetwork,
+    };
+  });
+};
+
+/** Compare only explicitly managed topology, not GKE-generated NICs/subnets. */
+export const nodePoolTopologyDrift = (
+  observed: Pick<NodePoolAttributes, "placementPolicy" | "networkConfig">,
+  news: NodePoolProps,
+): string[] => [
+  ...(news.placementPolicy !== undefined && !deepEqual(
+    normalizedPlacement(observed.placementPolicy), normalizedPlacement(news.placementPolicy),
+  ) ? ["placementPolicy"] : []),
+  ...(news.networkConfig !== undefined &&
+    (observed.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig.acceleratorNetworkProfile
+    ? ["networkConfig.acceleratorNetworkProfile"] : []),
+  ...(news.networkConfig?.additionalNodeNetworkConfigs !== undefined && !deepEqual(
+    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+    normalizedNodeNetworks(news.networkConfig.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+  ) ? ["networkConfig.additionalNodeNetworkConfigs"] : []),
+];
+
+/** A recovered live resource can already satisfy a failed attempt's new props.
+ * Compare the complete topology here, including removals: the regular drift
+ * check deliberately ignores fields no longer managed by a declaration.
+ */
+const observedTopologyMatches = (observed: NodePoolAttributes, news: NodePoolProps) =>
+  deepEqual(normalizedPlacement(observed.placementPolicy), normalizedPlacement(news.placementPolicy)) &&
+  (observed.networkConfig?.acceleratorNetworkProfile || undefined) === (news.networkConfig?.acceleratorNetworkProfile || undefined) &&
+  (news.networkConfig?.acceleratorNetworkProfile === "auto" || deepEqual(
+    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+    normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+  ));
+
+const validateNodeNetworks = (news: NodePoolProps) =>
+  news.networkConfig?.acceleratorNetworkProfile && news.networkConfig.additionalNodeNetworkConfigs?.length
+    ? Effect.fail(new Error("NodePool: automatic accelerator networking and explicit additional node networks are mutually exclusive"))
+    : Effect.void;
+
+const normalizedReservationAffinity = (affinity: cont.ReservationAffinity | NodePoolProps["config"]["reservationAffinity"] | undefined) =>
+  affinity ? {
+    consumeReservationType: affinity.consumeReservationType,
+    key: affinity.key || undefined,
+    values: (affinity.values ?? []).map((value) => computeResourcePath(value)),
+  } : undefined;
+const reservationAffinityMatches = (observed: cont.ReservationAffinity | undefined, news: NodePoolProps) =>
+  deepEqual(normalizedReservationAffinity(observed), normalizedReservationAffinity(news.config.reservationAffinity));
+const reservationAffinityError = () => new Error(
+  "NodePool: cannot recover or change immutable reservationAffinity without matching live reservation evidence. Choose a new pool name for an actual affinity change.",
+);
+const incompleteReservationAffinity = (affinity: NodePoolProps["config"]["reservationAffinity"]) =>
+  affinity?.consumeReservationType === "SPECIFIC_RESERVATION" &&
+  (!affinity.key || !affinity.values?.length || affinity.values.some((value) => typeof value !== "string" || !value));
+
+/** Never replace a physical pool by adopting its own still-live predecessor. */
+export const diffNodePoolTopology = Effect.fn(function* (
+  olds: Partial<NodePoolProps>,
+  news: NodePoolProps,
+  output?: NodePoolAttributes,
+) {
+  if (!olds.config) return undefined;
+  const changed = !deepEqual(normalizedPlacement(olds.placementPolicy), normalizedPlacement(news.placementPolicy)) ||
+    (olds.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig?.acceleratorNetworkProfile ||
+    !deepEqual(normalizedNodeNetworks(olds.networkConfig?.additionalNodeNetworkConfigs, output?.networkConfig?.subnetwork), normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs, output?.networkConfig?.subnetwork)) ||
+    (output !== undefined && nodePoolTopologyDrift(output, news).length > 0);
+  if (!changed) return undefined;
+  if (news.name !== undefined && news.name === olds.name &&
+    news.project === olds.project && news.location === olds.location && news.clusterName === olds.clusterName) {
+    // Interrupted create recovery retains attempted props but refreshes output
+    // from read. If that exact pool already converged, update its state rather
+    // than replacing it or blocking recovery on the stale attempted topology.
+    if (output?.name === news.name && output.project === news.project &&
+      output.location === news.location && output.clusterName === news.clusterName &&
+      observedTopologyMatches(output, news)) return { action: "update" } as const;
+    return yield* Effect.fail(new Error(
+      "NodePool: placementPolicy, acceleratorNetworkProfile, and additional node networks are immutable. " +
+      "Choose a new pool name to replace an explicitly named pool safely.",
+    ));
+  }
+  return { action: "replace" } as const;
+});
+
+/** Complete create payload, shared with unit tests to verify API field nesting. */
+export const toNodePoolCreateBody = (
+  news: NodePoolProps,
+  name: string,
+  resourceLabels: Record<string, string>,
+): cont.NodePool => ({
+  name,
+  initialNodeCount: news.initialNodeCount ?? news.autoscaling?.minNodeCount ?? 1,
+  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
+  config: toNodeConfigCreateBody(news.config, resourceLabels),
+  ...(news.placementPolicy ? { placementPolicy: news.placementPolicy } : {}),
+  ...(news.networkConfig ? { networkConfig: {
+    ...(news.networkConfig.acceleratorNetworkProfile ? { acceleratorNetworkProfile: news.networkConfig.acceleratorNetworkProfile } : {}),
+    ...(news.networkConfig.additionalNodeNetworkConfigs ? { additionalNodeNetworkConfigs: [...news.networkConfig.additionalNodeNetworkConfigs] } : {}),
+  } } : {}),
+  ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
+  ...(news.management ? { management: news.management } : {}),
+  ...(news.upgradeSettings ? { upgradeSettings: news.upgradeSettings } : {}),
 });
 
 export const NodePoolProvider = () =>
@@ -560,8 +739,9 @@ export const NodePoolProvider = () =>
         nuke: { skip: true },
         list: () => Effect.succeed([]),
         stables: ["name", "selfLink", "project", "location", "clusterName"],
-        diff: Effect.fn(function* ({ news, olds = {} }) {
+        diff: Effect.fn(function* ({ id, instanceId, news, olds = {}, output }) {
           if (!isResolved(news)) return undefined;
+          yield* validateNodeNetworks(news);
           if (
             somePropsAreDifferent(olds as NodePoolProps, news, [
               "project",
@@ -572,8 +752,25 @@ export const NodePoolProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
+          const topologyDiff = yield* diffNodePoolTopology(olds, news, output);
+          if (topologyDiff?.action === "replace") return topologyDiff;
           const oc = olds.config ?? ({} as NodePoolProps["config"]);
           const nc = news.config;
+          const affinityChanged = !deepEqual(oc.reservationAffinity, nc.reservationAffinity);
+          let recoveredAffinity = false;
+          if (affinityChanged && incompleteReservationAffinity(oc.reservationAffinity)) {
+            // Failed create state can contain [null] where an unresolved Output
+            // was stripped. Only a fresh, matching same-pool observation may
+            // replace that missing evidence; never interpret it as a new pool.
+            const expectedName = news.name ??
+              (yield* createPhysicalName({ id, instanceId, maxLength: 40 })).toLowerCase();
+            if (!output || output.name !== expectedName || output.project !== news.project ||
+              output.location !== news.location || output.clusterName !== news.clusterName ||
+              !output.config?.reservationAffinity || !reservationAffinityMatches(output.config.reservationAffinity, news)) {
+              return yield* Effect.fail(reservationAffinityError());
+            }
+            recoveredAffinity = true;
+          }
           if (
             somePropsAreDifferent(oc, nc, [
               "serviceAccount",
@@ -590,7 +787,7 @@ export const NodePoolProvider = () =>
             !deepEqual(oc.oauthScopes, nc.oauthScopes) ||
             !deepEqual(oc.metadata, nc.metadata) ||
             !deepEqual(oc.sandboxConfig, nc.sandboxConfig) ||
-            !deepEqual(oc.reservationAffinity, nc.reservationAffinity) ||
+            (affinityChanged && !recoveredAffinity) ||
             !deepEqual(oc.shieldedInstanceConfig, nc.shieldedInstanceConfig) ||
             !deepEqual(oc.localNvmeSsdBlockConfig, nc.localNvmeSsdBlockConfig) ||
             !deepEqual(
@@ -600,13 +797,14 @@ export const NodePoolProvider = () =>
           ) {
             return { action: "replace" } as const;
           }
-          return undefined;
+          return topologyDiff ?? (recoveredAffinity ? { action: "update" } as const : undefined);
         }),
-        reconcile: Effect.fn(function* ({ id, news, session }) {
+        reconcile: Effect.fn(function* ({ id, instanceId, news, session }) {
+          yield* validateNodeNetworks(news);
           const internalLabels = yield* gcpInternalLabels(id);
           const desiredName =
             news.name ??
-            (yield* createPhysicalName({ id, maxLength: 40 })).toLowerCase();
+            (yield* createPhysicalName({ id, instanceId, maxLength: 40 })).toLowerCase();
           const clusterPath = `projects/${news.project}/locations/${news.location}/clusters/${news.clusterName}`;
           const fqName = `${clusterPath}/nodePools/${desiredName}`;
           const desiredResourceLabels: Record<string, string> = {
@@ -626,24 +824,10 @@ export const NodePoolProvider = () =>
           //    creates and state-persistence races; fall through and
           //    re-observe.
           if (!observed) {
-            const config = toNodeConfigCreateBody(news.config, desiredResourceLabels);
-            // GKE Standard rejects creates without a positive node
-            // count. If the user didn't specify, fall back to the
-            // autoscaler floor (or 1 if there's no autoscaler config).
-            const createNodeCount =
-              news.initialNodeCount ?? news.autoscaling?.minNodeCount ?? 1;
             const op = yield* createNodePools({
               parent: clusterPath,
               body: {
-                nodePool: {
-                  name: desiredName,
-                  initialNodeCount: createNodeCount,
-                  ...(news.nodeLocations ? { locations: [...news.nodeLocations] } : {}),
-                  config,
-                  ...(news.autoscaling ? { autoscaling: news.autoscaling } : {}),
-                  ...(news.management ? { management: news.management } : {}),
-                  ...(news.upgradeSettings ? { upgradeSettings: news.upgradeSettings } : {}),
-                },
+                nodePool: toNodePoolCreateBody(news, desiredName, desiredResourceLabels),
               },
             }).pipe(
               Effect.catchTag("Conflict", () =>
@@ -652,6 +836,20 @@ export const NodePoolProvider = () =>
             );
             if (op?.name) yield* awaitOperation(qualifyOp(fqName, op.name), session);
             observed = yield* getNodePools({ name: fqName });
+          }
+
+          if (news.config.reservationAffinity !== undefined &&
+            !reservationAffinityMatches(observed.config?.reservationAffinity, news)) {
+            return yield* Effect.fail(reservationAffinityError());
+          }
+
+          // An existing explicit name (including a concurrent create) cannot
+          // be repaired by updating immutable topology. Fail before mutations.
+          if (nodePoolTopologyDrift(observed, news).length > 0) {
+            return yield* Effect.fail(new Error(
+              "NodePool: existing pool has incompatible immutable placement or accelerator networking. " +
+              "Choose a new pool name instead of reusing the existing pool.",
+            ));
           }
 
           // 3. Sync — sequential, each aspect independently idempotent.

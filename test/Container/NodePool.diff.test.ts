@@ -132,6 +132,30 @@ describe("NodePool accelerator topology", () => {
     expect(await Effect.runPromise(diffNodePoolTopology(explicit, { ...reordered, name: "new" }))).toEqual({ action: "replace" });
   });
 
+  test("bare observed NIC names use primary subnet host/region without conflating qualified references", async () => {
+    const desired = { ...gb200, networkConfig: { additionalNodeNetworkConfigs: [{
+      network: "projects/host/global/networks/rdma", subnetwork: "projects/host/regions/us-east1/subnetworks/rail-0",
+    }] } };
+    const observed = { placementPolicy: gb200.placementPolicy, networkConfig: {
+      subnetwork: "projects/host/regions/us-east1/subnetworks/primary",
+      additionalNodeNetworkConfigs: [{ network: "rdma", subnetwork: "rail-0" }],
+    } };
+    expect(nodePoolTopologyDrift(observed, desired)).toEqual([]);
+    const attrs = toNodePoolAttributes(observed, desired);
+    expect(attrs.networkConfig?.subnetwork).toBe(observed.networkConfig.subnetwork);
+    expect(await Effect.runPromise(diffNodePoolTopology(desired, desired, attrs))).toBeUndefined();
+    for (const nic of [
+      { network: "projects/other/global/networks/rdma", subnetwork: "projects/host/regions/us-east1/subnetworks/rail-0" },
+      { network: "projects/host/global/networks/rdma", subnetwork: "projects/host/regions/us-west1/subnetworks/rail-0" },
+    ]) {
+      const changed = { ...desired, networkConfig: { additionalNodeNetworkConfigs: [nic] } };
+      expect(nodePoolTopologyDrift(observed, changed)).toEqual(["networkConfig.additionalNodeNetworkConfigs"]);
+      await expect(Effect.runPromise(diffNodePoolTopology(desired, changed, attrs))).rejects.toThrow("Choose a new pool name");
+    }
+    expect(nodePoolTopologyDrift({ ...observed, networkConfig: { ...observed.networkConfig, subnetwork: undefined } }, desired)).toEqual(["networkConfig.additionalNodeNetworkConfigs"]);
+    expect(nodePoolTopologyDrift({ ...observed, networkConfig: { ...observed.networkConfig, subnetwork: "projects/other/regions/us-east1/subnetworks/primary" } }, desired)).toEqual(["networkConfig.additionalNodeNetworkConfigs"]);
+  });
+
   test("named policy identity tolerates sparse type responses while unnamed placement remains strict", async () => {
     const sparse = { ...gb200, placementPolicy: { policyName: "gb200-nvl72" } };
     expect(nodePoolTopologyDrift(sparse, gb200)).toEqual([]);
@@ -164,6 +188,13 @@ describe("NodePool accelerator topology", () => {
         observed = JSON.parse(new TextDecoder().decode(request.body.body)).nodePool;
         // Exercise a sparse named-policy response through the actual reconciler.
         delete observed!.placementPolicy!.type;
+        if (observed!.networkConfig?.additionalNodeNetworkConfigs) {
+          expect(observed!.networkConfig.additionalNodeNetworkConfigs).toEqual([...(desired.networkConfig?.additionalNodeNetworkConfigs ?? [])]);
+          observed!.networkConfig.subnetwork = "projects/host/regions/us-east1/subnetworks/primary";
+          observed!.networkConfig.additionalNodeNetworkConfigs = observed!.networkConfig.additionalNodeNetworkConfigs.map((nic) => ({
+            network: nic.network!.split("/").at(-1), subnetwork: nic.subnetwork!.split("/").at(-1),
+          }));
+        }
         return HttpClientResponse.fromWeb(request, Response.json({}));
       }
       expect(request.method).toBe("GET");
@@ -178,7 +209,8 @@ describe("NodePool accelerator topology", () => {
       expect(String(yield* provider.reconcile({ ...input, news: invalid }).pipe(Effect.flip))).toContain("mutually exclusive");
       expect(methods).toEqual([]);
       const created = yield* provider.reconcile(input);
-      expect(created.networkConfig).toEqual(desired.networkConfig);
+      expect(created.networkConfig).toEqual(observed!.networkConfig);
+      expect(nodePoolTopologyDrift(created, desired)).toEqual([]);
       expect(created.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
       expect(methods.filter((method) => method !== "GET")).toEqual(["POST"]);
       methods.length = 0;
@@ -186,7 +218,8 @@ describe("NodePool accelerator topology", () => {
       expect(methods.every((method) => method === "GET")).toBe(true);
       const read = yield* provider.read!({ id: "gpu", olds: gb200, output: created } as never);
       expect(read?.placementPolicy).toEqual({ policyName: "gb200-nvl72" });
-      expect(read?.networkConfig).toEqual(desired.networkConfig);
+      expect(read?.networkConfig).toEqual(observed!.networkConfig);
+      expect(yield* provider.diff!({ id: "gpu", olds: desired, news: desired, output: created } as never)).toBeUndefined();
       observed = { ...observed, networkConfig: undefined };
       methods.length = 0;
       const failure = yield* provider.reconcile(input).pipe(Effect.flip);

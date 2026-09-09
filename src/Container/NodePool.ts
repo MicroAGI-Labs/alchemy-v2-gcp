@@ -217,10 +217,11 @@ export type NodePoolAttributes = {
   instanceGroupUrls: ReadonlyArray<string>;
   /** Observed placement policy; refreshed by read to detect topology drift. */
   placementPolicy?: { type?: string; policyName?: string };
-  /** Only the managed profile is exposed, not GKE-generated network details. */
+  /** Observed topology and primary-subnet context for resolving bare NIC names. */
   networkConfig?: {
     acceleratorNetworkProfile?: string;
     additionalNodeNetworkConfigs?: ReadonlyArray<cont.AdditionalNodeNetworkConfig>;
+    subnetwork?: string;
   };
 };
 
@@ -476,6 +477,7 @@ export const toNodePoolAttributes = (
   ...(pool.placementPolicy ? { placementPolicy: pool.placementPolicy } : {}),
   ...(pool.networkConfig ? {
     networkConfig: {
+      ...(pool.networkConfig.subnetwork ? { subnetwork: pool.networkConfig.subnetwork } : {}),
       ...(pool.networkConfig.acceleratorNetworkProfile ? { acceleratorNetworkProfile: pool.networkConfig.acceleratorNetworkProfile } : {}),
       ...(pool.networkConfig.additionalNodeNetworkConfigs ? { additionalNodeNetworkConfigs: pool.networkConfig.additionalNodeNetworkConfigs } : {}),
     },
@@ -489,13 +491,27 @@ const normalizedPlacement = (policy: { type?: string; policyName?: string } | un
   policyName: policy?.policyName || undefined,
 });
 
-// GKE can return full URLs for a request using project-relative resource paths.
-// Keep array order: it determines which physical NIC receives each network.
-const normalizedNodeNetworks = (networks: ReadonlyArray<cont.AdditionalNodeNetworkConfig> | undefined) =>
-  (networks ?? []).map(({ network, subnetwork }) => ({
-    network: network?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, ""),
-    subnetwork: subnetwork?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, ""),
-  }));
+const computeResourcePath = (value: string | undefined) =>
+  value?.replace(/^https:\/\/(?:www\.googleapis\.com|compute\.googleapis\.com)\/compute\/(?:v1|beta|alpha)\//, "");
+
+// Shared VPC NICs belong to the primary subnet's host project and region.
+// GKE returns bare additional NIC names even for fully qualified requests.
+// Resolve only bare names with observed context; never discard a qualified
+// reference's project/region. Keep order because it determines physical NICs.
+const normalizedNodeNetworks = (
+  networks: ReadonlyArray<cont.AdditionalNodeNetworkConfig> | undefined,
+  primarySubnet?: string,
+) => {
+  const context = computeResourcePath(primarySubnet)?.match(/^projects\/([^/]+)\/regions\/([^/]+)\/subnetworks\/[^/]+$/);
+  return (networks ?? []).map((nic) => {
+    const network = computeResourcePath(nic.network);
+    const subnetwork = computeResourcePath(nic.subnetwork);
+    return {
+      network: context && network && !network.includes("/") ? `projects/${context[1]}/global/networks/${network}` : network,
+      subnetwork: context && subnetwork && !subnetwork.includes("/") ? `projects/${context[1]}/regions/${context[2]}/subnetworks/${subnetwork}` : subnetwork,
+    };
+  });
+};
 
 /** Compare only explicitly managed topology, not GKE-generated NICs/subnets. */
 export const nodePoolTopologyDrift = (
@@ -509,8 +525,8 @@ export const nodePoolTopologyDrift = (
     (observed.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig.acceleratorNetworkProfile
     ? ["networkConfig.acceleratorNetworkProfile"] : []),
   ...(news.networkConfig?.additionalNodeNetworkConfigs !== undefined && !deepEqual(
-    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs),
-    normalizedNodeNetworks(news.networkConfig.additionalNodeNetworkConfigs),
+    normalizedNodeNetworks(observed.networkConfig?.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
+    normalizedNodeNetworks(news.networkConfig.additionalNodeNetworkConfigs, observed.networkConfig?.subnetwork),
   ) ? ["networkConfig.additionalNodeNetworkConfigs"] : []),
 ];
 
@@ -528,7 +544,7 @@ export const diffNodePoolTopology = Effect.fn(function* (
   if (!olds.config) return undefined;
   const changed = !deepEqual(normalizedPlacement(olds.placementPolicy), normalizedPlacement(news.placementPolicy)) ||
     (olds.networkConfig?.acceleratorNetworkProfile || undefined) !== news.networkConfig?.acceleratorNetworkProfile ||
-    !deepEqual(normalizedNodeNetworks(olds.networkConfig?.additionalNodeNetworkConfigs), normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs)) ||
+    !deepEqual(normalizedNodeNetworks(olds.networkConfig?.additionalNodeNetworkConfigs, output?.networkConfig?.subnetwork), normalizedNodeNetworks(news.networkConfig?.additionalNodeNetworkConfigs, output?.networkConfig?.subnetwork)) ||
     (output !== undefined && nodePoolTopologyDrift(output, news).length > 0);
   if (!changed) return undefined;
   if (news.name !== undefined && news.name === olds.name &&

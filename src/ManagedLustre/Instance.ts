@@ -100,8 +100,16 @@ export type ManagedLustreInstanceProps = {
   description?: string;
   /**
    * Capacity in **GiB** (1024-based). Sent to the API as a string per
-   * Lustre's int64-encoded-as-string convention. Replace-only — Lustre
-   * doesn't currently support online resize.
+   * Lustre's int64-encoded-as-string convention.
+   *
+   * **Increases** are applied in place via `patch` (`updateMask=
+   * capacityGib`) — an online, non-disruptive long-running operation
+   * (20 min to an hour or more; the filesystem stays mounted and
+   * usable throughout). The new value must be a multiple of the tier's
+   * step size (e.g. 72000 GiB at 125 MBps/TiB) and within the tier's
+   * quota (`StorageFor{125,250,500,1000}MBpThroughputPerTiB`).
+   * **Decreases** are not supported by the API and force a replace.
+   * See <https://cloud.google.com/managed-lustre/docs/increase-capacity>.
    */
   capacityGib: string;
   /**
@@ -224,6 +232,47 @@ const toAttributes = (
   labels: normalizeStringMap(i.labels) ?? {},
 });
 
+/** Lustre encodes int64 capacity as a decimal string; `undefined` if unparseable. */
+const parseCapacityGib = (value: string | undefined): number | undefined => {
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  return Number(value);
+};
+
+/**
+ * Plan-time diff. Everything the Lustre API treats as immutable forces a
+ * replace. `capacityGib` is the one sizing prop the API lets us change
+ * after create — but only upward, so a shrink (or an unparseable
+ * value) still replaces while a grow is an in-place update.
+ */
+export const diffManagedLustreInstanceProps = (
+  olds: Partial<ManagedLustreInstanceProps>,
+  news: ManagedLustreInstanceProps,
+): { action: "replace" } | undefined => {
+  if (
+    somePropsAreDifferent(olds as ManagedLustreInstanceProps, news, [
+      "project",
+      "location",
+      "instanceId",
+      "filesystem",
+      "network",
+      "dynamicTierMode",
+      "perUnitStorageThroughput",
+      "gkeSupportEnabled",
+      "kmsKey",
+    ])
+  ) {
+    return { action: "replace" } as const;
+  }
+  if (olds.capacityGib !== undefined && olds.capacityGib !== news.capacityGib) {
+    const oldCapacity = parseCapacityGib(olds.capacityGib);
+    const newCapacity = parseCapacityGib(news.capacityGib);
+    if (oldCapacity === undefined || newCapacity === undefined || newCapacity < oldCapacity) {
+      return { action: "replace" } as const;
+    }
+  }
+  return undefined;
+};
+
 export const ManagedLustreInstanceProvider = () =>
   Provider.effect(
     ManagedLustreInstance,
@@ -288,27 +337,48 @@ export const ManagedLustreInstanceProvider = () =>
       const syncMutable = Effect.fn(function* (args: {
         name: string;
         observed: lustre.Instance;
-        desired: { description: string | undefined; labels: Record<string, string> };
+        desired: {
+          description: string | undefined;
+          labels: Record<string, string>;
+          capacityGib: string;
+        };
         session: ScopedPlanStatusSession;
       }) {
         const updateMaskFields: string[] = [];
+        const body: lustre.Instance = {};
         if ((args.observed.description ?? undefined) !== args.desired.description) {
           updateMaskFields.push("description");
+          body.description = args.desired.description;
         }
         const observedLabels = normalizeStringMap(args.observed.labels) ?? {};
         const labelDiff = diffTags(observedLabels, args.desired.labels);
         if (labelDiff.removed.length > 0 || labelDiff.upsert.length > 0) {
           updateMaskFields.push("labels");
+          body.labels = args.desired.labels;
+        }
+        // Capacity grows in place (online LRO). Shrinks never reach here:
+        // `diff` turns them into a replace, and a fresh create already
+        // carries the desired capacity. Compare numerically so "72000"
+        // and "072000" don't trip a spurious patch.
+        const observedCapacity = parseCapacityGib(args.observed.capacityGib);
+        const desiredCapacity = parseCapacityGib(args.desired.capacityGib);
+        if (
+          observedCapacity !== undefined &&
+          desiredCapacity !== undefined &&
+          desiredCapacity > observedCapacity
+        ) {
+          updateMaskFields.push("capacityGib");
+          body.capacityGib = args.desired.capacityGib;
+          yield* args.session.note(
+            `Growing Managed Lustre ${args.name} from ${args.observed.capacityGib} GiB to ${args.desired.capacityGib} GiB in place…`,
+          );
         }
         if (updateMaskFields.length === 0) return;
 
         const op = yield* patchInstance({
           name: args.name,
           updateMask: updateMaskFields.join(","),
-          body: {
-            description: args.desired.description,
-            labels: args.desired.labels,
-          },
+          body,
         });
         if (op.name) yield* awaitOperation(op.name, args.session);
       });
@@ -319,23 +389,7 @@ export const ManagedLustreInstanceProvider = () =>
         stables: ["instanceId", "project", "location", "name"],
         diff: Effect.fn(function* ({ news, olds = {} }) {
           if (!isResolved(news)) return undefined;
-          if (
-            somePropsAreDifferent(olds as ManagedLustreInstanceProps, news, [
-              "project",
-              "location",
-              "instanceId",
-              "filesystem",
-              "network",
-              "capacityGib",
-              "dynamicTierMode",
-              "perUnitStorageThroughput",
-              "gkeSupportEnabled",
-              "kmsKey",
-            ])
-          ) {
-            return { action: "replace" } as const;
-          }
-          return undefined;
+          return diffManagedLustreInstanceProps(olds, news);
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           const internalLabels = yield* gcpInternalLabels(id);
@@ -385,7 +439,11 @@ export const ManagedLustreInstanceProvider = () =>
           yield* syncMutable({
             name,
             observed,
-            desired: { description: news.description, labels: desiredLabels },
+            desired: {
+              description: news.description,
+              labels: desiredLabels,
+              capacityGib: news.capacityGib,
+            },
             session,
           });
 

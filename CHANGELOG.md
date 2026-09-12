@@ -4,6 +4,16 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.13.0 — 2026-09-12
+
+### Changed
+
+- `ManagedLustreInstance` grows `capacityGib` in place via `patch`
+  (`updateMask=capacityGib`) instead of replacing the instance. Managed Lustre
+  supports online, increase-only capacity changes; the filesystem stays
+  mounted while the long-running operation completes. Decreases and
+  unparseable capacities still replace, as do all other sizing props.
+
 ## 0.12.0 — 2026-09-09
 
 ### Added

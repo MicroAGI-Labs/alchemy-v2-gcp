@@ -3,7 +3,7 @@ import * as lustre from "@distilled.cloud/gcp/lustre_v1";
 import { Resource } from "alchemy";
 import { Unowned } from "alchemy/AdoptPolicy";
 import type { ScopedPlanStatusSession } from "alchemy/Cli/Cli";
-import { isResolved, somePropsAreDifferent } from "alchemy/Diff";
+import { deepEqual, isResolved, somePropsAreDifferent } from "alchemy/Diff";
 import { createPhysicalName } from "alchemy/PhysicalName";
 import * as Provider from "alchemy/Provider";
 import { diffTags } from "alchemy/Tags";
@@ -151,6 +151,43 @@ export type ManagedLustreInstanceProps = {
    * Mutable via `patch`.
    */
   labels?: Record<string, string>;
+  /**
+   * When Google may apply service maintenance (UTC). Managed Lustre allows
+   * one weekly window, fixed at one hour, and at most one exclusion of up
+   * to two weeks; an exclusion overrides the weekly window. Without a
+   * policy, Google picks the time. Omit to leave the instance's current
+   * policy unmanaged; `{}` clears it. Mutable via `patch`
+   * (`updateMask=maintenancePolicy`).
+   * See <https://cloud.google.com/managed-lustre/docs/maintenance>.
+   */
+  maintenancePolicy?: ManagedLustreMaintenancePolicy;
+};
+
+/** Time of day in UTC. Omitted fields are zero, as in the API. */
+export type ManagedLustreTimeOfDay = { hours?: number; minutes?: number };
+
+/** Calendar date. Omit `year` for an exclusion that recurs every year. */
+export type ManagedLustreDate = { year?: number; month: number; day: number };
+
+export type ManagedLustreMaintenancePolicy = {
+  /** At most one entry. */
+  weeklyMaintenanceWindows?: Array<{
+    dayOfWeek:
+      | "MONDAY"
+      | "TUESDAY"
+      | "WEDNESDAY"
+      | "THURSDAY"
+      | "FRIDAY"
+      | "SATURDAY"
+      | "SUNDAY";
+    startTime: ManagedLustreTimeOfDay;
+  }>;
+  /** At most one entry, at most two weeks long; both dates inclusive. */
+  maintenanceExclusionWindow?: Array<{
+    startDate: ManagedLustreDate;
+    endDate: ManagedLustreDate;
+    time?: ManagedLustreTimeOfDay;
+  }>;
 };
 
 export type ManagedLustreInstanceAttributes = {
@@ -187,6 +224,8 @@ export type ManagedLustreInstanceAttributes = {
   kmsKey: string | undefined;
   /** Labels currently set, including internals. */
   labels: Record<string, string>;
+  /** Maintenance policy currently set, as the API returns it. */
+  maintenancePolicy: lustre.MaintenancePolicy | undefined;
 };
 
 export type ManagedLustreInstance = Resource<
@@ -230,7 +269,50 @@ const toAttributes = (
   gkeSupportEnabled: i.gkeSupportEnabled,
   kmsKey: i.kmsKey,
   labels: normalizeStringMap(i.labels) ?? {},
+  maintenancePolicy: i.maintenancePolicy,
 });
+
+// The API drops zero-valued fields: a 00:00 start comes back as
+// `startTime: {}`. Fill them in so equal policies compare equal.
+const normalizeTimeOfDay = (t: lustre.TimeOfDay | undefined) => ({
+  hours: t?.hours ?? 0,
+  minutes: t?.minutes ?? 0,
+  seconds: t?.seconds ?? 0,
+  nanos: t?.nanos ?? 0,
+});
+
+const normalizeDate = (d: lustre.Lustre_Date | undefined) => ({
+  year: d?.year ?? 0,
+  month: d?.month ?? 0,
+  day: d?.day ?? 0,
+});
+
+const normalizeMaintenancePolicy = (p: lustre.MaintenancePolicy | undefined) => ({
+  weeklyMaintenanceWindows: (p?.weeklyMaintenanceWindows ?? []).map((w) => ({
+    dayOfWeek: w.dayOfWeek,
+    startTime: normalizeTimeOfDay(w.startTime),
+  })),
+  maintenanceExclusionWindow: (p?.maintenanceExclusionWindow ?? []).map((e) => ({
+    startDate: normalizeDate(e.startDate),
+    endDate: normalizeDate(e.endDate),
+    time: normalizeTimeOfDay(e.time),
+  })),
+});
+
+/**
+ * The policy to patch, or `undefined` when nothing should be written:
+ * the prop is omitted (unmanaged) or the live policy already matches.
+ */
+export const managedLustreMaintenancePolicyUpdate = (
+  observed: lustre.MaintenancePolicy | undefined,
+  desired: ManagedLustreMaintenancePolicy | undefined,
+): lustre.MaintenancePolicy | undefined => {
+  if (!desired) return undefined;
+  if (deepEqual(normalizeMaintenancePolicy(observed), normalizeMaintenancePolicy(desired))) {
+    return undefined;
+  }
+  return desired;
+};
 
 /** Lustre encodes int64 capacity as a decimal string; `undefined` if unparseable. */
 const parseCapacityGib = (value: string | undefined): number | undefined => {
@@ -341,6 +423,7 @@ export const ManagedLustreInstanceProvider = () =>
           description: string | undefined;
           labels: Record<string, string>;
           capacityGib: string;
+          maintenancePolicy: ManagedLustreMaintenancePolicy | undefined;
         };
         session: ScopedPlanStatusSession;
       }) {
@@ -372,6 +455,14 @@ export const ManagedLustreInstanceProvider = () =>
           yield* args.session.note(
             `Growing Managed Lustre ${args.name} from ${args.observed.capacityGib} GiB to ${args.desired.capacityGib} GiB in place…`,
           );
+        }
+        const maintenancePolicy = managedLustreMaintenancePolicyUpdate(
+          args.observed.maintenancePolicy,
+          args.desired.maintenancePolicy,
+        );
+        if (maintenancePolicy) {
+          updateMaskFields.push("maintenancePolicy");
+          body.maintenancePolicy = maintenancePolicy;
         }
         if (updateMaskFields.length === 0) return;
 
@@ -421,6 +512,9 @@ export const ManagedLustreInstanceProvider = () =>
                 ? { gkeSupportEnabled: news.gkeSupportEnabled }
                 : {}),
               ...(news.kmsKey ? { kmsKey: news.kmsKey } : {}),
+              ...(news.maintenancePolicy
+                ? { maintenancePolicy: news.maintenancePolicy }
+                : {}),
               labels: desiredLabels,
             };
             const op = yield* createInstance({
@@ -443,6 +537,7 @@ export const ManagedLustreInstanceProvider = () =>
               description: news.description,
               labels: desiredLabels,
               capacityGib: news.capacityGib,
+              maintenancePolicy: news.maintenancePolicy,
             },
             session,
           });

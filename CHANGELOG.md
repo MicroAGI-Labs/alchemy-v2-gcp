@@ -4,6 +4,17 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.14.0 — 2026-10-16
+
+### Added
+
+- `ManagedLustreInstance` `maintenancePolicy`: a weekly one-hour maintenance
+  window and an optional exclusion, set at create and patched in place
+  (`updateMask=maintenancePolicy`). The API drops zero-valued time fields
+  (a 00:00 start comes back as `startTime: {}`), so the comparison fills
+  them in rather than patching on every deploy. Omitted means unmanaged and
+  `{}` clears. The attributes now include the live `maintenancePolicy`.
+
 ## 0.13.0 — 2026-09-12
 
 ### Changed

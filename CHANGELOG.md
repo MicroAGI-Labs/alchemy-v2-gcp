@@ -4,6 +4,18 @@ All notable changes to `@microagi/alchemy-gcp`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this package
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.14.1 — 2026-11-20
+
+### Fixed
+
+- `SharedVpcServiceProject` delete is idempotent when the service project is
+  already detached. It now runs the same attachment check as `read` and
+  returns without calling `disableXpnResource` when the project is not
+  attached to the host. GCP's "is not linked to shared VPC host" 400 is also
+  treated as already detached, for a detach that races the check. Other 400s,
+  such as resources still using the host's subnets, still fail. A 403 on the
+  lookup still attempts the detach, so a permission error is not hidden.
+
 ## 0.14.0 — 2026-10-16
 
 ### Added
